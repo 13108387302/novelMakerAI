@@ -1,0 +1,66 @@
+{
+  "id": "pdf_export",
+  "name": "PDF导出器",
+  "version": "1.0.0",
+  "description": "将项目和文档导出为PDF格式，支持专业排版",
+  "author": "AI小说编辑器团队",
+  "type": "export",
+  "entry_point": "plugin.py",
+  "main_class": "PDFExportPlugin",
+  "dependencies": ["reportlab"],
+  "min_app_version": "2.0.0",
+  "max_app_version": "3.0.0",
+  "tags": ["导出", "PDF", "文档", "排版"],
+  "config_schema": {
+    "page_size": {
+      "type": "string",
+      "enum": ["A4", "Letter"],
+      "default": "A4",
+      "description": "页面大小"
+    },
+    "font_size": {
+      "type": "integer",
+      "minimum": 8,
+      "maximum": 24,
+      "default": 12,
+      "description": "字体大小"
+    },
+    "line_spacing": {
+      "type": "number",
+      "minimum": 1.0,
+      "maximum": 3.0,
+      "default": 1.2,
+      "description": "行间距"
+    },
+    "include_toc": {
+      "type": "boolean",
+      "default": true,
+      "description": "包含目录"
+    },
+    "include_header": {
+      "type": "boolean",
+      "default": true,
+      "description": "包含页眉"
+    },
+    "include_footer": {
+      "type": "boolean",
+      "default": true,
+      "description": "包含页脚"
+    },
+    "chapter_break": {
+      "type": "boolean",
+      "default": true,
+      "description": "章节分页"
+    }
+  },
+  "supported_formats": [".pdf"],
+  "permissions": ["file_write", "project_read", "document_read", "font_access"],
+  "resources": {
+    "fonts": ["fonts/"],
+    "templates": ["templates/"],
+    "icons": ["icons/"]
+  },
+  "requirements": {
+    "python_packages": ["reportlab>=3.6.0"]
+  }
+}

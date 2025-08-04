@@ -1,0 +1,49 @@
+{
+  "id": "markdown_export",
+  "name": "Markdown导出器",
+  "version": "1.0.0",
+  "description": "将项目和文档导出为Markdown格式，支持多种Markdown风格",
+  "author": "AI小说编辑器团队",
+  "type": "export",
+  "entry_point": "plugin.py",
+  "main_class": "MarkdownExportPlugin",
+  "dependencies": [],
+  "min_app_version": "2.0.0",
+  "max_app_version": "3.0.0",
+  "tags": ["导出", "Markdown", "文档"],
+  "config_schema": {
+    "include_toc": {
+      "type": "boolean",
+      "default": true,
+      "description": "包含目录"
+    },
+    "include_metadata": {
+      "type": "boolean", 
+      "default": true,
+      "description": "包含元数据"
+    },
+    "markdown_flavor": {
+      "type": "string",
+      "enum": ["standard", "github", "commonmark"],
+      "default": "github",
+      "description": "Markdown风格"
+    },
+    "code_highlighting": {
+      "type": "boolean",
+      "default": true,
+      "description": "代码高亮"
+    },
+    "line_breaks": {
+      "type": "string",
+      "enum": ["lf", "crlf", "cr"],
+      "default": "lf",
+      "description": "换行符类型"
+    }
+  },
+  "supported_formats": [".md", ".markdown"],
+  "permissions": ["file_write", "project_read", "document_read"],
+  "resources": {
+    "templates": ["templates/"],
+    "icons": ["icons/"]
+  }
+}
