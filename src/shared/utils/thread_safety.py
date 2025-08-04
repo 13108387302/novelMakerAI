@@ -159,23 +159,27 @@ class ThreadSafeQObject(QObject):
             )
 
 
-def safe_qt_call(func: Callable, *args, **kwargs) -> Any:
+def safe_qt_call(func: Callable, *args, timeout: float = 30.0, **kwargs) -> Any:
     """
-    安全的Qt调用，确保在主线程中执行
+    安全的Qt调用，确保在主线程中执行（增强健壮性版本）
 
     提供一个通用的方法来确保Qt相关的函数调用在主线程中执行。
     如果当前已在主线程则直接执行，否则切换到主线程执行。
+    增加了超时保护、错误恢复和资源清理机制。
 
     实现方式：
+    - 输入验证和边界条件检查
     - 检查当前是否在主线程
     - 如果不在主线程，使用QTimer切换到主线程
     - 使用Event对象等待执行完成
     - 正确传递返回值和异常
     - 提供超时保护机制
+    - 资源清理和错误恢复
 
     Args:
         func: 要执行的函数
         *args: 函数的位置参数
+        timeout: 超时时间（秒），默认30秒
         **kwargs: 函数的关键字参数
 
     Returns:
@@ -184,45 +188,76 @@ def safe_qt_call(func: Callable, *args, **kwargs) -> Any:
     Raises:
         RuntimeError: 当没有QApplication实例时抛出
         TimeoutError: 当执行超时时抛出
+        ValueError: 当输入参数无效时抛出
         Exception: 传递被调用函数抛出的异常
     """
+    # 输入验证
+    if not func or not callable(func):
+        raise ValueError("func必须是可调用对象")
+
+    if timeout <= 0:
+        raise ValueError("timeout必须大于0")
+
     if is_main_thread():
-        return func(*args, **kwargs)
-    
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            logger.error(f"主线程执行函数失败: {func.__name__}: {e}")
+            raise
+
     app = QApplication.instance()
     if not app:
         raise RuntimeError("没有QApplication实例")
-    
+
+    # 检查应用程序状态
+    if app.closingDown():
+        logger.warning("应用程序正在关闭，跳过Qt调用")
+        raise RuntimeError("应用程序正在关闭")
+
     result = None
     exception = None
     finished = threading.Event()
-    
+    timer = None
+
     def execute():
         nonlocal result, exception
         try:
             result = func(*args, **kwargs)
         except Exception as e:
             exception = e
+            logger.error(f"Qt调用执行失败: {func.__name__}: {e}")
         finally:
             finished.set()
     
-    # 使用QTimer在主线程中执行
-    from PyQt6.QtCore import QTimer
-    timer = QTimer()
-    timer.setSingleShot(True)
-    timer.timeout.connect(execute)
-    timer.start(0)
-    
-    # 等待执行完成
-    finished.wait(timeout=10.0)  # 10秒超时
-    
-    if not finished.is_set():
-        raise TimeoutError("Qt调用超时")
-    
-    if exception:
-        raise exception
-    
-    return result
+    try:
+        # 使用QTimer在主线程中执行
+        from PyQt6.QtCore import QTimer
+        timer = QTimer()
+        timer.setSingleShot(True)
+        timer.timeout.connect(execute)
+        timer.start(0)
+
+        # 等待执行完成
+        if not finished.wait(timeout=timeout):
+            logger.error(f"Qt调用超时: {func.__name__} ({timeout}秒)")
+            raise TimeoutError(f"Qt调用超时: {timeout}秒")
+
+        if exception:
+            raise exception
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Qt调用失败: {func.__name__}: {e}")
+        raise
+    finally:
+        # 清理资源
+        if timer:
+            try:
+                timer.stop()
+                timer.deleteLater()
+            except Exception as cleanup_error:
+                logger.warning(f"清理QTimer失败: {cleanup_error}")
 
 
 class ThreadSafeService:

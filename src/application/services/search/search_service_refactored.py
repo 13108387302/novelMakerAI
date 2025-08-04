@@ -94,68 +94,115 @@ class SearchService:
 
         logger.info("搜索服务初始化完成")
 
-    def search(self, query: SearchQuery) -> SearchResultSet:
+    def search(self, query: SearchQuery, timeout: float = 30.0) -> SearchResultSet:
         """
-        执行搜索操作
+        执行搜索操作（增强健壮性版本）
 
         根据搜索查询执行全文搜索，返回排序后的搜索结果集。
         记录搜索历史和统计信息，发布搜索事件。
+        增加了输入验证、超时处理和错误恢复机制。
 
         实现方式：
+        - 输入验证和边界条件检查
         - 使用线程锁确保并发安全
+        - 超时保护机制（Unix系统）
         - 记录搜索开始时间和历史
         - 调用内部搜索方法执行实际搜索
         - 对结果进行排序和后处理
         - 更新搜索统计信息
-        - 发布搜索完成事件
+        - 安全发布搜索完成事件
 
         Args:
             query: 搜索查询对象，包含搜索文本和选项
+            timeout: 搜索超时时间（秒），默认30秒
 
         Returns:
             SearchResultSet: 搜索结果集，包含匹配的文档和统计信息
         """
+        # 输入验证
+        if not query:
+            logger.warning("搜索查询为空")
+            return SearchResultSet(SearchQuery("", SearchOptions()), [])
+
+        if not query.text or not query.text.strip():
+            logger.warning("搜索文本为空")
+            return SearchResultSet(query, [])
+
+        # 查询长度限制
+        if len(query.text) > 1000:
+            logger.warning(f"搜索查询过长: {len(query.text)} 字符，截断到1000字符")
+            query.text = query.text[:1000]
+
         start_time = datetime.now()
-        
+
         try:
-            with self._lock:
-                # 记录搜索历史
-                history_item = SearchHistoryItem(
-                    id=str(uuid4()),
-                    query=query.text,
-                    options=query.options,
-                    timestamp=start_time,
-                    result_count=0
-                )
-                
-                # 执行搜索
-                results = self._perform_search(query)
-                
-                # 创建结果集
-                result_set = SearchResultSet(query, results)
-                result_set.search_time = (datetime.now() - start_time).total_seconds()
-                
-                # 排序结果
-                result_set.sort_results()
-                
-                # 更新历史和统计
-                history_item.result_count = len(results)
-                self.search_history.append(history_item)
-                self._update_statistics(query, len(results), result_set.search_time)
-                
-                # 发布搜索事件
-                self.event_bus.publish(DocumentSearchedEvent(
-                    query=query.text,
-                    result_count=len(results),
-                    search_time=result_set.search_time
-                ))
-                
-                logger.info(f"搜索完成: '{query.text}' -> {len(results)} 个结果")
-                return result_set
-                
+            # 使用超时机制（仅在Unix系统上）
+            import signal
+
+            def timeout_handler(signum, frame):
+                raise SearchTimeoutException(f"搜索超时: {timeout}秒")
+
+            # 设置超时（仅在Unix系统上）
+            old_handler = None
+            if hasattr(signal, 'SIGALRM'):
+                old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+                signal.alarm(int(timeout))
+
+            try:
+                with self._lock:
+                    # 记录搜索历史
+                    history_item = SearchHistoryItem(
+                        id=str(uuid4()),
+                        query=query.text,
+                        options=query.options,
+                        timestamp=start_time,
+                        result_count=0
+                    )
+
+                    # 执行搜索
+                    results = self._perform_search(query)
+
+                    # 创建结果集
+                    result_set = SearchResultSet(query, results)
+                    result_set.search_time = (datetime.now() - start_time).total_seconds()
+
+                    # 排序结果
+                    result_set.sort_results()
+
+                    # 更新历史和统计
+                    history_item.result_count = len(results)
+                    self.search_history.append(history_item)
+                    self._update_statistics(query, len(results), result_set.search_time)
+
+                    # 发布搜索事件（安全发布）
+                    try:
+                        self.event_bus.publish(DocumentSearchedEvent(
+                            query=query.text,
+                            result_count=len(results),
+                            search_time=result_set.search_time
+                        ))
+                    except Exception as event_error:
+                        logger.warning(f"发布搜索事件失败: {event_error}")
+
+                    logger.info(f"搜索完成: '{query.text}' -> {len(results)} 个结果")
+                    return result_set
+
+            finally:
+                # 清除超时设置
+                if hasattr(signal, 'SIGALRM') and old_handler is not None:
+                    signal.alarm(0)
+                    signal.signal(signal.SIGALRM, old_handler)
+
+        except SearchTimeoutException as e:
+            logger.error(f"搜索超时: {e}")
+            if hasattr(self.search_statistics, 'timeout_count'):
+                self.search_statistics.timeout_count += 1
+            return SearchResultSet(query, [])
         except Exception as e:
             logger.error(f"搜索失败: {e}")
-            raise SearchException(f"搜索失败: {e}")
+            if hasattr(self.search_statistics, 'error_count'):
+                self.search_statistics.error_count += 1
+            return SearchResultSet(query, [])
 
     def _perform_search(self, query: SearchQuery) -> List[SearchResult]:
         """执行实际搜索"""
@@ -374,11 +421,24 @@ class SearchService:
             return False
 
     def get_search_history(self, limit: int = 50) -> List[SearchHistoryItem]:
-        """获取搜索历史"""
+        """
+        获取搜索历史记录
+
+        Args:
+            limit: 返回的历史记录数量限制，默认50条
+
+        Returns:
+            List[SearchHistoryItem]: 按时间倒序排列的搜索历史记录列表
+        """
         return sorted(self.search_history, key=lambda x: x.timestamp, reverse=True)[:limit]
 
     def get_search_statistics(self) -> SearchStatistics:
-        """获取搜索统计"""
+        """
+        获取搜索统计信息
+
+        Returns:
+            SearchStatistics: 包含搜索次数、结果数量、平均时间等统计信息
+        """
         return self.search_statistics
 
     def get_word_suggestions(self, prefix: str, limit: int = 10) -> List[str]:

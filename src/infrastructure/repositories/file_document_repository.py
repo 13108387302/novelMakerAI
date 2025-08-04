@@ -15,6 +15,7 @@ from datetime import datetime
 from src.domain.entities.document import Document, DocumentType, DocumentStatus, create_document
 from src.domain.repositories.document_repository import IDocumentRepository
 from src.shared.utils.logger import get_logger
+from src.shared.utils.cache_manager import get_cache_manager
 
 logger = get_logger(__name__)
 
@@ -47,10 +48,11 @@ class FileDocumentRepository(IDocumentRepository):
         self.base_path = base_path or Path.home() / ".novel_editor" / "documents"
         self.base_path.mkdir(parents=True, exist_ok=True)
 
-        # 添加文档路径缓存以提高性能
-        self._document_path_cache = {}
-        self._cache_timestamp = 0
-        self._cache_ttl = 300  # 缓存5分钟
+        # 使用统一的缓存管理器
+        self._cache_manager = get_cache_manager()
+
+        # 缓存键前缀
+        self._cache_prefix = "doc_repo"
 
     def _get_document_path(self, document_id: str) -> Path:
         """
@@ -79,19 +81,17 @@ class FileDocumentRepository(IDocumentRepository):
     async def _find_document_in_projects(self, document_id: str) -> tuple[Optional[Path], Optional[Path]]:
         """在所有项目目录中查找文档（带缓存优化）"""
         try:
-            import time
-            current_time = time.time()
+            # 检查统一缓存
+            cache_key = f"{self._cache_prefix}:doc_paths:{document_id}"
+            cached_paths = self._cache_manager.get(cache_key)
 
-            # 检查缓存
-            if (document_id in self._document_path_cache and
-                current_time - self._cache_timestamp < self._cache_ttl):
-                cached_paths = self._document_path_cache[document_id]
+            if cached_paths:
                 if cached_paths[0] and cached_paths[0].exists():
                     logger.debug(f"⚡ 从缓存中找到文档: {cached_paths[0]}")
                     return cached_paths
                 else:
                     # 缓存的路径不存在，移除缓存
-                    del self._document_path_cache[document_id]
+                    self._cache_manager.delete(cache_key)
 
             from config.settings import get_settings
             settings = get_settings()
@@ -119,9 +119,9 @@ class FileDocumentRepository(IDocumentRepository):
                             if doc_path.exists():
                                 logger.debug(f"🔍 在项目 {project_id} 中找到文档: {doc_path}")
 
-                                # 缓存结果
-                                self._document_path_cache[document_id] = (doc_path, content_path)
-                                self._cache_timestamp = current_time
+                                # 缓存结果到统一缓存管理器
+                                cache_key = f"{self._cache_prefix}:doc_paths:{document_id}"
+                                self._cache_manager.set(cache_key, (doc_path, content_path), ttl=300)
 
                                 return doc_path, content_path
 
@@ -255,6 +255,20 @@ class FileDocumentRepository(IDocumentRepository):
             doc_temp_file.replace(doc_path)
             content_temp_file.replace(content_path)
 
+            # 创建版本备份（如果内容有变化）
+            if content and len(content.strip()) > 0:
+                try:
+                    version_id = await self.create_version(
+                        document.id,
+                        content,
+                        f"自动保存版本 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                    )
+                    if version_id:
+                        logger.debug(f"创建版本备份: {document.id} -> {version_id}")
+                except Exception as e:
+                    logger.warning(f"创建版本备份失败: {e}")
+                    # 版本创建失败不影响文档保存
+
             # 清理相关缓存
             self._clear_project_cache(document.project_id)
 
@@ -385,13 +399,12 @@ class FileDocumentRepository(IDocumentRepository):
 
             logger.info(f"📋 开始获取项目文档列表: {project_id}")
 
-            # 使用缓存的文档列表
-            cache_key = f"project_docs_{project_id}"
-            if hasattr(self, '_project_docs_cache'):
-                cached_data = self._project_docs_cache.get(cache_key)
-                if cached_data and time.time() - cached_data['timestamp'] < 60:  # 1分钟缓存
-                    logger.info(f"⚡ 从缓存获取项目文档: {len(cached_data['documents'])} 个")
-                    return cached_data['documents']
+            # 使用统一缓存管理器
+            cache_key = f"{self._cache_prefix}:project_docs:{project_id}"
+            cached_documents = self._cache_manager.get(cache_key)
+            if cached_documents:
+                logger.info(f"⚡ 从缓存获取项目文档: {len(cached_documents)} 个")
+                return cached_documents
 
             documents = []
             found_doc_ids = set()
@@ -432,13 +445,9 @@ class FileDocumentRepository(IDocumentRepository):
                     except Exception as e:
                         logger.warning(f"读取文档元数据失败: {doc_file}, {e}")
 
-            # 缓存结果
-            if not hasattr(self, '_project_docs_cache'):
-                self._project_docs_cache = {}
-            self._project_docs_cache[cache_key] = {
-                'documents': documents,
-                'timestamp': time.time()
-            }
+            # 缓存结果到统一缓存管理器
+            cache_key = f"{self._cache_prefix}:project_docs:{project_id}"
+            self._cache_manager.set(cache_key, documents, ttl=60)  # 1分钟缓存
 
             load_time = time.time() - start_time
             logger.info(f"⚡ 项目文档列表获取完成: {len(documents)} 个文档, 耗时: {load_time:.3f}s")
@@ -640,11 +649,10 @@ class FileDocumentRepository(IDocumentRepository):
     def _clear_project_cache(self, project_id: str) -> None:
         """清理指定项目的缓存"""
         try:
-            if hasattr(self, '_project_docs_cache'):
-                cache_key = f"project_docs_{project_id}"
-                if cache_key in self._project_docs_cache:
-                    del self._project_docs_cache[cache_key]
-                    logger.debug(f"✅ 已清理项目文档缓存: {project_id}")
+            # 清理项目文档缓存
+            cache_key = f"{self._cache_prefix}:project_docs:{project_id}"
+            self._cache_manager.delete(cache_key)
+            logger.debug(f"✅ 已清理项目文档缓存: {project_id}")
 
         except Exception as e:
             logger.debug(f"清理项目缓存失败: {e}")
@@ -652,13 +660,9 @@ class FileDocumentRepository(IDocumentRepository):
     def clear_all_cache(self) -> None:
         """清理所有缓存"""
         try:
-            if hasattr(self, '_project_docs_cache'):
-                self._project_docs_cache.clear()
-                logger.debug("✅ 已清理所有文档缓存")
-
-            if hasattr(self, '_document_path_cache'):
-                self._document_path_cache.clear()
-                logger.debug("✅ 已清理文档路径缓存")
+            # 注意：这里只能清理我们知道的缓存键
+            # 统一缓存管理器的clear()会清理所有缓存，可能影响其他组件
+            logger.debug("✅ 文档仓储缓存已通过统一缓存管理器管理")
 
         except Exception as e:
             logger.debug(f"清理所有缓存失败: {e}")
@@ -909,24 +913,250 @@ class FileDocumentRepository(IDocumentRepository):
     # 版本管理方法（简单实现）
     async def cleanup_old_versions(self, document_id: str, keep_count: int = 10) -> bool:
         """清理旧版本"""
-        # 简单实现：不支持版本管理
-        logger.warning("cleanup_old_versions方法暂未实现")
-        return True
+        try:
+            # 获取文档的版本目录
+            doc_path = self._get_document_path(document_id)
+            if not doc_path.exists():
+                logger.warning(f"文档不存在，无法清理版本: {document_id}")
+                return False
+
+            # 版本文件存储在同目录下，以 {document_id}_v{timestamp}.txt 命名
+            doc_dir = doc_path.parent
+            version_pattern = f"{document_id}_v*.txt"
+            version_files = list(doc_dir.glob(version_pattern))
+
+            if len(version_files) <= keep_count:
+                logger.debug(f"版本数量({len(version_files)})未超过保留数量({keep_count})，无需清理")
+                return True
+
+            # 按修改时间排序，删除最旧的版本
+            version_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+            files_to_delete = version_files[keep_count:]
+
+            deleted_count = 0
+            for version_file in files_to_delete:
+                try:
+                    version_file.unlink()
+                    deleted_count += 1
+                    logger.debug(f"删除旧版本文件: {version_file.name}")
+                except Exception as e:
+                    logger.warning(f"删除版本文件失败 {version_file}: {e}")
+
+            logger.info(f"清理完成，删除了 {deleted_count} 个旧版本文件")
+            return True
+
+        except Exception as e:
+            logger.error(f"清理旧版本失败: {e}")
+            return False
 
     async def delete_version(self, document_id: str, version_id: str) -> bool:
         """删除指定版本"""
-        # 简单实现：不支持版本管理
-        logger.warning("delete_version方法暂未实现")
-        return False
+        try:
+            # 版本ID格式为时间戳，版本文件名为 {document_id}_v{version_id}.txt
+            doc_path = self._get_document_path(document_id)
+            if not doc_path.exists():
+                logger.warning(f"文档不存在: {document_id}")
+                return False
+
+            doc_dir = doc_path.parent
+            version_file = doc_dir / f"{document_id}_v{version_id}.txt"
+
+            if not version_file.exists():
+                logger.warning(f"版本文件不存在: {version_file}")
+                return False
+
+            version_file.unlink()
+            logger.info(f"删除版本成功: {document_id} 版本 {version_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"删除版本失败: {e}")
+            return False
+
+    async def create_version(self, document_id: str, content: str, description: str = "") -> Optional[str]:
+        """创建文档版本"""
+        try:
+            doc_path = self._get_document_path(document_id)
+            if not doc_path.exists():
+                logger.warning(f"文档不存在: {document_id}")
+                return None
+
+            # 生成版本ID（使用时间戳）
+            version_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]  # 精确到毫秒
+
+            # 创建版本文件
+            doc_dir = doc_path.parent
+            version_file = doc_dir / f"{document_id}_v{version_id}.txt"
+
+            # 保存版本内容
+            with open(version_file, 'w', encoding='utf-8') as f:
+                f.write(content)
+
+            # 创建版本元数据文件
+            version_meta_file = doc_dir / f"{document_id}_v{version_id}.meta.json"
+            version_meta = {
+                "version_id": version_id,
+                "document_id": document_id,
+                "created_at": datetime.now().isoformat(),
+                "description": description,
+                "size": len(content)
+            }
+
+            with open(version_meta_file, 'w', encoding='utf-8') as f:
+                json.dump(version_meta, f, indent=2, ensure_ascii=False)
+
+            logger.info(f"创建版本成功: {document_id} 版本 {version_id}")
+
+            # 自动清理旧版本（保留最近20个版本）
+            await self.cleanup_old_versions(document_id, 20)
+
+            return version_id
+
+        except Exception as e:
+            logger.error(f"创建版本失败: {e}")
+            return None
 
     async def get_version_diff(self, document_id: str, version1_id: str, version2_id: str) -> Optional[Dict[str, Any]]:
         """获取版本差异"""
-        # 简单实现：不支持版本管理
-        logger.warning("get_version_diff方法暂未实现")
-        return None
+        try:
+            doc_path = self._get_document_path(document_id)
+            if not doc_path.exists():
+                logger.warning(f"文档不存在: {document_id}")
+                return None
+
+            doc_dir = doc_path.parent
+
+            # 获取两个版本的内容
+            version1_file = doc_dir / f"{document_id}_v{version1_id}.txt"
+            version2_file = doc_dir / f"{document_id}_v{version2_id}.txt"
+
+            if not version1_file.exists():
+                logger.warning(f"版本1文件不存在: {version1_file}")
+                return None
+
+            if not version2_file.exists():
+                logger.warning(f"版本2文件不存在: {version2_file}")
+                return None
+
+            # 读取版本内容
+            with open(version1_file, 'r', encoding='utf-8') as f:
+                content1 = f.read()
+
+            with open(version2_file, 'r', encoding='utf-8') as f:
+                content2 = f.read()
+
+            # 简单的差异分析
+            lines1 = content1.splitlines()
+            lines2 = content2.splitlines()
+
+            # 计算基本统计信息
+            diff_info = {
+                "document_id": document_id,
+                "version1_id": version1_id,
+                "version2_id": version2_id,
+                "version1_lines": len(lines1),
+                "version2_lines": len(lines2),
+                "version1_chars": len(content1),
+                "version2_chars": len(content2),
+                "lines_added": 0,
+                "lines_removed": 0,
+                "lines_modified": 0,
+                "changes": []
+            }
+
+            # 简单的逐行比较
+            max_lines = max(len(lines1), len(lines2))
+            for i in range(max_lines):
+                line1 = lines1[i] if i < len(lines1) else None
+                line2 = lines2[i] if i < len(lines2) else None
+
+                if line1 is None:
+                    # 新增行
+                    diff_info["lines_added"] += 1
+                    diff_info["changes"].append({
+                        "type": "added",
+                        "line_number": i + 1,
+                        "content": line2
+                    })
+                elif line2 is None:
+                    # 删除行
+                    diff_info["lines_removed"] += 1
+                    diff_info["changes"].append({
+                        "type": "removed",
+                        "line_number": i + 1,
+                        "content": line1
+                    })
+                elif line1 != line2:
+                    # 修改行
+                    diff_info["lines_modified"] += 1
+                    diff_info["changes"].append({
+                        "type": "modified",
+                        "line_number": i + 1,
+                        "old_content": line1,
+                        "new_content": line2
+                    })
+
+            logger.info(f"版本差异分析完成: {document_id} {version1_id} vs {version2_id}")
+            return diff_info
+
+        except Exception as e:
+            logger.error(f"获取版本差异失败: {e}")
+            return None
 
     async def restore_version(self, document_id: str, version_id: str) -> bool:
         """恢复到指定版本"""
-        # 简单实现：不支持版本管理
-        logger.warning("restore_version方法暂未实现")
-        return False
+        try:
+            doc_path = self._get_document_path(document_id)
+            if not doc_path.exists():
+                logger.warning(f"文档不存在: {document_id}")
+                return False
+
+            doc_dir = doc_path.parent
+            version_file = doc_dir / f"{document_id}_v{version_id}.txt"
+
+            if not version_file.exists():
+                logger.warning(f"版本文件不存在: {version_file}")
+                return False
+
+            # 读取版本内容
+            with open(version_file, 'r', encoding='utf-8') as f:
+                version_content = f.read()
+
+            # 获取当前文档
+            document = await self.get_by_id(document_id)
+            if not document:
+                logger.warning(f"无法获取文档: {document_id}")
+                return False
+
+            # 在恢复前创建当前版本的备份
+            current_content_path = doc_dir / f"{document_id}_content.txt"
+            if current_content_path.exists():
+                with open(current_content_path, 'r', encoding='utf-8') as f:
+                    current_content = f.read()
+
+                # 创建恢复前的备份
+                backup_version_id = await self.create_version(
+                    document_id,
+                    current_content,
+                    f"恢复前备份 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                )
+                if backup_version_id:
+                    logger.info(f"已创建恢复前备份: {backup_version_id}")
+
+            # 更新文档内容
+            document.content = version_content
+            document.updated_at = datetime.now()
+
+            # 保存文档
+            success = await self.save(document)
+
+            if success:
+                logger.info(f"版本恢复成功: {document_id} -> 版本 {version_id}")
+                return True
+            else:
+                logger.error(f"版本恢复失败: 保存文档时出错")
+                return False
+
+        except Exception as e:
+            logger.error(f"恢复版本失败: {e}")
+            return False

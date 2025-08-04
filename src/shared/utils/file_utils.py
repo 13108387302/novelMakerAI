@@ -119,10 +119,10 @@ class FileManager:
     def ensure_directory(self, path: Union[str, Path]) -> bool:
         """
         确保目录存在
-        
+
         Args:
             path: 目录路径
-            
+
         Returns:
             bool: 操作是否成功
         """
@@ -131,6 +131,177 @@ class FileManager:
             return True
         except Exception as e:
             logger.error(f"创建目录失败: {e}")
+            return False
+
+    def safe_read(self, path: Union[str, Path], encoding: str = 'utf-8', max_size_mb: int = 100) -> Optional[str]:
+        """
+        安全读取文件内容（增强健壮性版本）
+
+        Args:
+            path: 文件路径
+            encoding: 文件编码
+            max_size_mb: 最大文件大小（MB），防止内存溢出
+
+        Returns:
+            Optional[str]: 文件内容，失败时返回None
+        """
+        try:
+            # 输入验证
+            if not path:
+                logger.warning("文件路径为空")
+                return None
+
+            file_path = Path(path)
+
+            if not file_path.exists():
+                logger.warning(f"文件不存在: {file_path}")
+                return None
+
+            if not file_path.is_file():
+                logger.warning(f"路径不是文件: {file_path}")
+                return None
+
+            # 检查文件大小
+            file_size = file_path.stat().st_size
+            max_size_bytes = max_size_mb * 1024 * 1024
+
+            if file_size > max_size_bytes:
+                logger.warning(f"文件过大: {file_size / (1024*1024):.1f}MB > {max_size_mb}MB")
+                return None
+
+            # 检查文件权限
+            if not os.access(file_path, os.R_OK):
+                logger.warning(f"文件无读取权限: {file_path}")
+                return None
+
+            with open(file_path, 'r', encoding=encoding) as f:
+                content = f.read()
+                logger.debug(f"文件读取成功: {file_path} ({file_size} bytes)")
+                return content
+
+        except UnicodeDecodeError as e:
+            logger.error(f"文件编码错误: {e}")
+            # 尝试其他编码
+            fallback_encodings = ['gbk', 'latin-1', 'cp1252', 'utf-16']
+            for fallback_encoding in fallback_encodings:
+                try:
+                    with open(file_path, 'r', encoding=fallback_encoding) as f:
+                        content = f.read()
+                        logger.info(f"使用备用编码 {fallback_encoding} 读取成功: {file_path}")
+                        return content
+                except Exception:
+                    continue
+            logger.error(f"所有编码尝试失败: {file_path}")
+            return None
+        except PermissionError as e:
+            logger.error(f"文件权限错误: {e}")
+            return None
+        except OSError as e:
+            logger.error(f"文件系统错误: {e}")
+            return None
+        except MemoryError as e:
+            logger.error(f"内存不足，无法读取文件: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"读取文件失败: {e}")
+            return None
+
+    def safe_write(self, path: Union[str, Path], content: str, encoding: str = 'utf-8',
+                   backup: bool = True, atomic: bool = True) -> bool:
+        """
+        安全写入文件内容（增强健壮性版本）
+
+        Args:
+            path: 文件路径
+            content: 要写入的内容
+            encoding: 文件编码
+            backup: 是否创建备份
+            atomic: 是否使用原子写入（先写临时文件再重命名）
+
+        Returns:
+            bool: 写入是否成功
+        """
+        try:
+            # 输入验证
+            if not path:
+                logger.warning("文件路径为空")
+                return False
+
+            if content is None:
+                logger.warning("写入内容为None")
+                return False
+
+            file_path = Path(path)
+
+            # 确保目录存在
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # 检查磁盘空间（简单估算）
+            try:
+                content_size = len(content.encode(encoding))
+                free_space = shutil.disk_usage(file_path.parent).free
+                if content_size > free_space:
+                    logger.error(f"磁盘空间不足: 需要 {content_size} bytes，可用 {free_space} bytes")
+                    return False
+            except Exception as space_error:
+                logger.warning(f"无法检查磁盘空间: {space_error}")
+
+            # 创建备份
+            backup_path = None
+            if backup and file_path.exists():
+                backup_path = file_path.with_suffix(f"{file_path.suffix}.backup")
+                try:
+                    shutil.copy2(file_path, backup_path)
+                    logger.debug(f"创建备份: {backup_path}")
+                except Exception as backup_error:
+                    logger.warning(f"创建备份失败: {backup_error}")
+
+            if atomic:
+                # 原子写入：先写临时文件再重命名
+                temp_path = file_path.with_suffix(f"{file_path.suffix}.tmp")
+                try:
+                    with open(temp_path, 'w', encoding=encoding) as f:
+                        f.write(content)
+                        f.flush()
+                        os.fsync(f.fileno())  # 强制写入磁盘
+
+                    # 原子重命名
+                    temp_path.replace(file_path)
+                    logger.debug(f"原子写入成功: {file_path}")
+
+                except Exception as write_error:
+                    # 清理临时文件
+                    if temp_path.exists():
+                        temp_path.unlink()
+                    raise write_error
+            else:
+                # 直接写入
+                with open(file_path, 'w', encoding=encoding) as f:
+                    f.write(content)
+                    f.flush()
+                    os.fsync(f.fileno())
+                logger.debug(f"直接写入成功: {file_path}")
+
+            return True
+
+        except PermissionError as e:
+            logger.error(f"文件权限错误: {e}")
+            return False
+        except OSError as e:
+            logger.error(f"文件系统错误: {e}")
+            return False
+        except UnicodeEncodeError as e:
+            logger.error(f"编码错误: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"写入文件失败: {e}")
+            # 尝试恢复备份
+            if backup_path and backup_path.exists():
+                try:
+                    shutil.copy2(backup_path, file_path)
+                    logger.info(f"已恢复备份: {file_path}")
+                except Exception as restore_error:
+                    logger.error(f"恢复备份失败: {restore_error}")
             return False
     
     def safe_copy(self, src: Union[str, Path], dst: Union[str, Path], 

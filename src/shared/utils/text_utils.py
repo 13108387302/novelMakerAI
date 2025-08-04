@@ -445,7 +445,4 @@ def extract_keywords(text: str, max_keywords: int = 10) -> List[Tuple[str, int]]
     return processor.extract_keywords(text, max_keywords)
 
 
-def find_duplicates(text: str, min_length: int = 10) -> List[Tuple[str, List[int]]]:
-    """查找重复文本的便捷函数"""
-    processor = TextProcessor()
-    return processor.find_duplicates(text, min_length)
+

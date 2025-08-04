@@ -293,10 +293,21 @@ def handle_errors(context: str = "", show_dialog: bool = True):
 
 
 def handle_async_errors(context: str = "", show_dialog: bool = True):
-    """异步错误处理装饰器"""
-    def decorator(func):
+    """
+    异步错误处理装饰器
+
+    为异步函数提供统一的错误处理机制，自动捕获异常并通过错误处理器处理。
+
+    Args:
+        context: 错误上下文描述，用于日志记录
+        show_dialog: 是否显示错误对话框，False时只记录日志
+
+    Returns:
+        装饰器函数
+    """
+    def decorator(func: Callable) -> Callable:
         @wraps(func)
-        async def wrapper(*args, **kwargs):
+        async def wrapper(*args: Any, **kwargs: Any) -> Any:
             try:
                 return await func(*args, **kwargs)
             except Exception as e:
@@ -310,8 +321,22 @@ def handle_async_errors(context: str = "", show_dialog: bool = True):
     return decorator
 
 
-def safe_execute(func: Callable, *args, context: str = "", default_return=None, **kwargs):
-    """安全执行函数"""
+def safe_execute(func: Callable, *args: Any, context: str = "", default_return: Any = None, **kwargs: Any) -> Any:
+    """
+    安全执行函数
+
+    捕获函数执行过程中的异常，通过错误处理器处理并返回默认值。
+
+    Args:
+        func: 要执行的函数
+        *args: 函数的位置参数
+        context: 错误上下文描述
+        default_return: 发生异常时的默认返回值
+        **kwargs: 函数的关键字参数
+
+    Returns:
+        Any: 函数的返回值或默认值
+    """
     try:
         return func(*args, **kwargs)
     except Exception as e:
@@ -320,8 +345,22 @@ def safe_execute(func: Callable, *args, context: str = "", default_return=None, 
         return default_return
 
 
-async def safe_execute_async(func: Callable, *args, context: str = "", default_return=None, **kwargs):
-    """安全执行异步函数"""
+async def safe_execute_async(func: Callable, *args: Any, context: str = "", default_return: Any = None, **kwargs: Any) -> Any:
+    """
+    安全执行异步函数
+
+    捕获异步函数执行过程中的异常，通过错误处理器处理并返回默认值。
+
+    Args:
+        func: 要执行的异步函数
+        *args: 函数的位置参数
+        context: 错误上下文描述
+        default_return: 发生异常时的默认返回值
+        **kwargs: 函数的关键字参数
+
+    Returns:
+        Any: 函数的返回值或默认值
+    """
     try:
         return await func(*args, **kwargs)
     except Exception as e:

@@ -26,8 +26,19 @@ from src.domain.events.ai_events import (
 )
 from src.shared.events.event_bus import EventBus
 from src.shared.utils.logger import get_logger
+from src.shared.utils.error_handler import ApplicationError
 
 logger = get_logger(__name__)
+
+
+class AIServiceError(ApplicationError):
+    """
+    AI服务错误基类
+
+    所有AI服务相关错误的基类，继承自ApplicationError。
+    用于标识AI服务层的各种错误情况。
+    """
+    pass
 
 
 class IAIService(ABC):
@@ -300,21 +311,4 @@ class BaseAIService(QObject, IAIService, metaclass=QABCMeta):
         ]
 
 
-class AIServiceError(Exception):
-    """AI服务异常"""
-    pass
 
-
-class AIServiceUnavailableError(AIServiceError):
-    """AI服务不可用异常"""
-    pass
-
-
-class AIRequestTimeoutError(AIServiceError):
-    """AI请求超时异常"""
-    pass
-
-
-class AIQuotaExceededError(AIServiceError):
-    """AI配额超限异常"""
-    pass

@@ -12,7 +12,6 @@
 """
 
 import asyncio
-import logging
 import threading
 import weakref
 from abc import ABC, abstractmethod
@@ -22,7 +21,9 @@ from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Set, Type, TypeVar, Union
 from uuid import uuid4
 
-logger = logging.getLogger(__name__)
+from src.shared.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 T = TypeVar('T', bound='Event')
 

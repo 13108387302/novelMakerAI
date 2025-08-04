@@ -14,12 +14,13 @@ from datetime import datetime
 
 from src.shared.events.event_bus import EventBus
 from src.shared.utils.logger import get_logger
+from src.shared.config.base_config_manager import BaseConfigManager
 from config.settings import Settings
 
 logger = get_logger(__name__)
 
 
-class SettingsService:
+class SettingsService(BaseConfigManager):
     """
     设置服务
 
@@ -54,67 +55,46 @@ class SettingsService:
         """
         self.settings = settings
         self.event_bus = event_bus
-        self._user_settings: Dict[str, Any] = {}
-        self._settings_file = self.settings.data_dir / "user_settings.json"
 
-        # 加载用户设置
-        self._load_user_settings()
+        # 调用父类构造函数
+        super().__init__(settings.data_dir)
 
         # 迁移设置（添加缺失的字段）
         self._migrate_settings()
-    
+
+    def get_config_file_name(self) -> str:
+        """获取配置文件名"""
+        return "user_settings.json"
+
+    def get_default_config(self) -> Dict[str, Any]:
+        """获取默认配置"""
+        return self._get_default_user_settings()
+
     def _load_user_settings(self) -> None:
-        """加载用户设置"""
-        try:
-            if self._settings_file.exists():
-                with open(self._settings_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
+        """加载用户设置（向后兼容）"""
+        # 基类已经在构造函数中加载了配置
+        pass
 
-                # 验证数据格式
-                if not isinstance(data, dict):
-                    raise ValueError("设置文件格式无效：根对象必须是字典")
+    def _save_user_settings(self) -> bool:
+        """保存用户设置（向后兼容）"""
+        return self.save()
 
-                self._user_settings = data
-                logger.info("用户设置加载成功")
-            else:
-                # 创建默认设置
-                self._user_settings = self._get_default_user_settings()
-                self._save_user_settings()
-                logger.info("创建默认用户设置")
+    @property
+    def _user_settings(self) -> Dict[str, Any]:
+        """获取用户设置数据（向后兼容）"""
+        return self.config_data
 
-        except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as e:
-            logger.error(f"用户设置文件格式错误: {e}")
-            # 尝试修复损坏的设置文件
-            self._repair_corrupted_settings()
-        except Exception as e:
-            logger.error(f"加载用户设置失败: {e}")
-            # 尝试修复损坏的设置文件
-            self._repair_corrupted_settings()
+    @_user_settings.setter
+    def _user_settings(self, value: Dict[str, Any]) -> None:
+        """设置用户设置数据（向后兼容）"""
+        self.config_data = value
 
-    def _repair_corrupted_settings(self) -> None:
-        """修复损坏的设置文件"""
-        try:
-            logger.info("尝试修复损坏的设置文件...")
+    @property
+    def _settings_file(self) -> Path:
+        """获取设置文件路径（向后兼容）"""
+        return self.config_file
 
-            # 备份损坏的文件
-            if self._settings_file.exists():
-                backup_file = self._settings_file.with_suffix('.corrupted.bak')
-                self._settings_file.rename(backup_file)
-                logger.info(f"已备份损坏的设置文件到: {backup_file}")
 
-            # 创建新的默认设置
-            self._user_settings = self._get_default_user_settings()
-            success = self._save_user_settings()
-
-            if success:
-                logger.info("设置文件修复成功，已创建新的默认设置")
-            else:
-                logger.error("设置文件修复失败")
-
-        except Exception as e:
-            logger.error(f"修复设置文件时发生错误: {e}")
-            # 最后的备用方案：使用内存中的默认设置
-            self._user_settings = self._get_default_user_settings()
 
     def _migrate_settings(self) -> None:
         """迁移设置（添加缺失的字段）"""
@@ -133,7 +113,8 @@ class SettingsService:
                     elif isinstance(default_value, dict) and isinstance(user_dict[key], dict):
                         merge_settings(user_dict[key], default_value)
 
-            merge_settings(self._user_settings, default_settings)
+            # 使用config_data而不是_user_settings
+            merge_settings(self.config_data, default_settings)
 
             # 如果有更新，保存设置
             if settings_updated:
@@ -143,65 +124,24 @@ class SettingsService:
         except Exception as e:
             logger.error(f"设置迁移失败: {e}")
     
-    def _save_user_settings(self) -> bool:
-        """保存用户设置"""
-        temp_file = None
-        try:
-            # 验证设置数据的JSON兼容性
-            self._validate_settings_for_json()
 
-            self._settings_file.parent.mkdir(parents=True, exist_ok=True)
 
-            # 先写入临时文件，然后重命名，确保原子性操作
-            temp_file = self._settings_file.with_suffix('.tmp')
-            with open(temp_file, 'w', encoding='utf-8') as f:
-                json.dump(self._user_settings, f, indent=2, ensure_ascii=False)
 
-            # 验证写入的文件是否有效
-            with open(temp_file, 'r', encoding='utf-8') as f:
-                json.load(f)  # 验证JSON格式
-
-            # 重命名临时文件为正式文件
-            temp_file.replace(self._settings_file)
-
-            logger.debug("用户设置保存成功")
-            return True
-
-        except Exception as e:
-            logger.error(f"保存用户设置失败: {e}")
-            # 清理临时文件
-            if temp_file and temp_file.exists():
-                try:
-                    temp_file.unlink()
-                except Exception:
-                    pass
-            return False
-
-    def _validate_settings_for_json(self):
-        """验证设置数据是否可以序列化为JSON"""
-        def check_value(obj, path=""):
-            if isinstance(obj, dict):
-                for key, value in obj.items():
-                    check_value(value, f"{path}.{key}" if path else key)
-            elif isinstance(obj, list):
-                for i, value in enumerate(obj):
-                    check_value(value, f"{path}[{i}]")
-            elif hasattr(obj, '__dict__') and not isinstance(obj, (str, int, float, bool, type(None))):
-                # 检测不可序列化的对象
-                raise TypeError(f"不可序列化的对象类型 {type(obj)} 在路径: {path}")
-
-        check_value(self._user_settings)
     
     def _get_default_user_settings(self) -> Dict[str, Any]:
-        """获取默认用户设置"""
+        """获取默认用户设置（基于config/settings.py的配置定义）"""
+        # 使用config/settings.py中定义的默认值，确保一致性
+        ui_settings = self.settings.ui
+        ai_settings = self.settings.ai_service
+
         return {
             "ui": {
-                "theme": "light",
-                "language": "zh_CN",
-                "font_family": "Microsoft YaHei UI",
-                "font_size": 12,
-                "line_spacing": 1.5,
-                "auto_save_interval": 30,
+                "theme": ui_settings.theme,
+                "language": ui_settings.language,
+                "font_family": ui_settings.font_family,
+                "font_size": ui_settings.font_size,
+                "line_spacing": 1.5,  # 扩展配置
+                "auto_save_interval": ui_settings.auto_save_interval,
                 "show_word_count": True,
                 "show_character_count": True,
                 "show_reading_time": True,
@@ -209,13 +149,13 @@ class SettingsService:
                 "enable_grammar_check": True,
                 "window_state": {
                     "maximized": False,
-                    "width": 1400,
-                    "height": 900,
+                    "width": ui_settings.window_width,
+                    "height": ui_settings.window_height,
                     "x": 100,
                     "y": 100
                 },
                 "splitter_sizes": [300, 800, 350],
-                "recent_projects_count": 10,
+                "recent_projects_count": ui_settings.recent_projects_count,
                 "last_opened_directory": "",
                 "recent_directories": [],
                 "window_geometry": "",
@@ -239,11 +179,11 @@ class SettingsService:
                 "distraction_free": False
             },
             "ai": {
-                "default_provider": "openai",
+                "default_provider": ai_settings.default_provider,
                 "auto_suggestions": True,
                 "suggestion_delay": 2000,  # 毫秒
-                "max_tokens": 2000,
-                "temperature": 0.7,
+                "max_tokens": ai_settings.max_tokens,
+                "temperature": ai_settings.temperature,
                 "enable_continuation": True,
                 "enable_dialogue_improvement": True,
                 "enable_scene_expansion": True,
@@ -275,41 +215,20 @@ class SettingsService:
     
     def get_setting(self, key: str, default: Any = None) -> Any:
         """获取设置值"""
-        try:
-            keys = key.split('.')
-            value = self._user_settings
-            
-            for k in keys:
-                if isinstance(value, dict) and k in value:
-                    value = value[k]
-                else:
-                    return default
-            
-            return value
-            
-        except Exception as e:
-            logger.error(f"获取设置失败: {key}, {e}")
-            return default
+        return self.get(key, default)
     
     def set_setting(self, key: str, value: Any) -> bool:
         """设置值"""
         try:
-            keys = key.split('.')
-            current = self._user_settings
-            
-            # 导航到父级字典
-            for k in keys[:-1]:
-                if k not in current:
-                    current[k] = {}
-                current = current[k]
-            
-            # 设置值
-            old_value = current.get(keys[-1])
-            current[keys[-1]] = value
-            
-            # 保存设置
-            success = self._save_user_settings()
-            
+            # 获取旧值用于事件发布
+            old_value = self.get(key)
+
+            # 使用基类的set方法
+            success = self.set(key, value, save_immediately=True)
+
+            # 同步到主配置对象（如果是核心配置项）
+            self._sync_to_main_config(key, value)
+
             if success:
                 # 发布设置变更事件（线程安全方式）
                 try:
@@ -617,6 +536,20 @@ class SettingsService:
         """保存窗口几何信息"""
         return self.set_setting("ui.window_geometry", geometry)
 
+    def set_window_geometry(self, geometry) -> bool:
+        """设置窗口几何信息（兼容性方法）"""
+        if hasattr(geometry, 'toBase64'):
+            # QByteArray对象
+            geometry_str = geometry.toBase64().data().decode()
+        elif isinstance(geometry, bytes):
+            # bytes对象
+            import base64
+            geometry_str = base64.b64encode(geometry).decode()
+        else:
+            # 字符串
+            geometry_str = str(geometry)
+        return self.set_setting("ui.window_geometry", geometry_str)
+
     def get_window_state(self) -> str:
         """获取窗口状态"""
         return self.get_setting("ui.window_state", "")
@@ -632,3 +565,70 @@ class SettingsService:
     def save_dock_state(self, state: str) -> bool:
         """保存停靠窗口状态"""
         return self.set_setting("ui.dock_state", state)
+
+    def set_dock_state(self, state) -> bool:
+        """设置停靠窗口状态（兼容性方法）"""
+        if hasattr(state, 'toBase64'):
+            # QByteArray对象
+            state_str = state.toBase64().data().decode()
+        elif isinstance(state, bytes):
+            # bytes对象
+            import base64
+            state_str = base64.b64encode(state).decode()
+        else:
+            # 字符串
+            state_str = str(state)
+        return self.set_setting("ui.dock_state", state_str)
+
+    def _sync_to_main_config(self, key: str, value: Any) -> None:
+        """同步设置到主配置对象"""
+        try:
+            # 同步核心UI配置到主配置对象
+            if key.startswith("ui."):
+                ui_key = key[3:]  # 移除"ui."前缀
+                if hasattr(self.settings.ui, ui_key):
+                    setattr(self.settings.ui, ui_key, value)
+                    logger.debug(f"已同步UI配置到主配置: {ui_key} = {value}")
+
+            # 同步AI配置到主配置对象
+            elif key.startswith("ai."):
+                ai_key = key[3:]  # 移除"ai."前缀
+                # 映射用户设置键到主配置键
+                key_mapping = {
+                    "default_provider": "default_provider",
+                    "max_tokens": "max_tokens",
+                    "temperature": "temperature"
+                }
+                if ai_key in key_mapping and hasattr(self.settings.ai_service, key_mapping[ai_key]):
+                    setattr(self.settings.ai_service, key_mapping[ai_key], value)
+                    logger.debug(f"已同步AI配置到主配置: {ai_key} = {value}")
+
+        except Exception as e:
+            logger.warning(f"同步配置到主配置失败: {key}, {e}")
+
+    def sync_from_main_config(self) -> bool:
+        """从主配置对象同步设置"""
+        try:
+            # 同步UI配置
+            ui_settings = self.settings.ui
+            self.set("ui.theme", ui_settings.theme, save_immediately=False)
+            self.set("ui.font_family", ui_settings.font_family, save_immediately=False)
+            self.set("ui.font_size", ui_settings.font_size, save_immediately=False)
+            self.set("ui.auto_save_interval", ui_settings.auto_save_interval, save_immediately=False)
+            self.set("ui.recent_projects_count", ui_settings.recent_projects_count, save_immediately=False)
+
+            # 同步AI配置
+            ai_settings = self.settings.ai_service
+            self.set("ai.default_provider", ai_settings.default_provider, save_immediately=False)
+            self.set("ai.max_tokens", ai_settings.max_tokens, save_immediately=False)
+            self.set("ai.temperature", ai_settings.temperature, save_immediately=False)
+
+            # 保存所有更改
+            success = self.save()
+            if success:
+                logger.info("已从主配置同步用户设置")
+            return success
+
+        except Exception as e:
+            logger.error(f"从主配置同步设置失败: {e}")
+            return False

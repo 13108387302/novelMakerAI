@@ -89,7 +89,7 @@ from src.application.services.project_service import ProjectService
 from src.application.services.document_service import DocumentService
 from src.application.services.ai_service import AIService
 from src.application.services.settings_service import SettingsService
-from src.application.services.search_service import SearchService
+from src.application.services.search import SearchService
 from src.application.services.import_export_service import ImportExportService
 from src.application.services.import_export.base import ImportOptions, ExportOptions
 from src.domain.entities.project import ProjectType, Project
@@ -144,7 +144,8 @@ class MainController(QObject):
         settings_service: SettingsService,
         search_service: SearchService,
         import_export_service: ImportExportService,
-        ai_assistant_manager: Optional['AIAssistantManager'] = None
+        ai_assistant_manager: Optional['AIAssistantManager'] = None,
+        status_service: Optional['StatusService'] = None
     ):
         """
         初始化主控制器
@@ -171,10 +172,10 @@ class MainController(QObject):
         self.search_service = search_service
         self.import_export_service = import_export_service
         self.ai_assistant_manager = ai_assistant_manager
+        self._status_service = status_service
 
         # 状态
         self._main_window: Optional['MainWindow'] = None
-        self._status_service = None  # 将在设置主窗口时初始化
 
         # 创建线程安全的回调发射器
         self.callback_emitter = ThreadSafeCallbackEmitter()
@@ -243,8 +244,8 @@ class MainController(QObject):
         """设置主窗口引用"""
         self._main_window = main_window
 
-        # 获取状态服务引用
-        if hasattr(main_window, 'status_service'):
+        # 如果没有注入的状态服务，则使用主窗口的状态服务
+        if not self._status_service and hasattr(main_window, 'status_service'):
             self._status_service = main_window.status_service
             logger.info("状态服务引用已设置")
 
@@ -257,40 +258,48 @@ class MainController(QObject):
             start_time = time.time()
 
             def run_in_thread():
+                loop = None
                 try:
                     # 在线程池线程中创建新的事件循环
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
 
-                    try:
-                        logger.debug("⚡ 开始执行异步协程")
-                        result = loop.run_until_complete(coro)
-                        execution_time = time.time() - start_time
-                        logger.debug(f"⚡ 异步协程执行完成，耗时: {execution_time:.3f}s")
+                    logger.debug("⚡ 开始执行异步协程")
+                    result = loop.run_until_complete(coro)
+                    execution_time = time.time() - start_time
+                    logger.debug(f"⚡ 异步协程执行完成，耗时: {execution_time:.3f}s")
 
-                        # 使用线程安全的方式执行回调
-                        if success_callback:
-                            logger.debug("准备执行成功回调")
-                            self._safe_callback(lambda: success_callback(result))
-                            logger.debug("成功回调已调度")
-                        else:
-                            logger.debug("没有成功回调")
-                    except Exception as e:
-                        logger.error(f"异步协程执行失败: {e}")
-                        # 使用线程安全的方式执行错误回调
-                        if error_callback:
-                            self._safe_callback(lambda: error_callback(e))
-                        else:
-                            self._safe_callback(lambda: logger.error(f"异步任务执行失败: {e}"))
-                    finally:
-                        loop.close()
+                    # 使用线程安全的方式执行回调
+                    if success_callback:
+                        logger.debug("准备执行成功回调")
+                        self._safe_callback(lambda res=result: success_callback(res))
+                        logger.debug("成功回调已调度")
+                    else:
+                        logger.debug("没有成功回调")
 
                 except Exception as e:
+                    logger.error(f"异步协程执行失败: {e}")
                     # 使用线程安全的方式执行错误回调
                     if error_callback:
-                        self._safe_callback(lambda: error_callback(e))
+                        self._safe_callback(lambda error=e: error_callback(error))
                     else:
-                        self._safe_callback(lambda: logger.error(f"创建异步任务失败: {e}"))
+                        self._safe_callback(lambda error=e: logger.error(f"异步任务执行失败: {error}"))
+                finally:
+                    # 确保事件循环正确关闭
+                    if loop and not loop.is_closed():
+                        try:
+                            # 取消所有未完成的任务
+                            pending = asyncio.all_tasks(loop)
+                            for task in pending:
+                                task.cancel()
+
+                            # 等待任务取消完成
+                            if pending:
+                                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                        except Exception as cleanup_error:
+                            logger.warning(f"清理异步任务时出错: {cleanup_error}")
+                        finally:
+                            loop.close()
 
             # 使用线程池执行，减少线程创建开销
             future = self._thread_pool.submit(run_in_thread)

@@ -277,6 +277,21 @@ class AIAssistantManager(QObject):
         为指定文档创建AI助手
 
         如果助手已存在则返回现有实例，否则创建新的助手实例。
+        这是一个幂等操作，多次调用是安全的。
+
+        Args:
+            document_id: 文档的唯一标识符
+
+        Returns:
+            DocumentAIAssistant: 文档的AI助手实例
+        """
+        return self.get_or_create_assistant(document_id)
+
+    def get_or_create_assistant(self, document_id: str) -> DocumentAIAssistant:
+        """
+        获取或创建指定文档的AI助手
+
+        这是推荐的方法，语义更清晰。
 
         Args:
             document_id: 文档的唯一标识符
@@ -285,7 +300,7 @@ class AIAssistantManager(QObject):
             DocumentAIAssistant: 文档的AI助手实例
         """
         if document_id in self._assistants:
-            logger.warning(f"文档 {document_id} 的AI助手已存在")
+            logger.debug(f"返回文档 {document_id} 的现有AI助手")
             return self._assistants[document_id]
 
         assistant = DocumentAIAssistant(document_id, self.ai_service, self)
@@ -305,6 +320,18 @@ class AIAssistantManager(QObject):
             Optional[DocumentAIAssistant]: AI助手实例，如果不存在则返回None
         """
         return self._assistants.get(document_id)
+
+    def has_assistant(self, document_id: str) -> bool:
+        """
+        检查指定文档是否已有AI助手
+
+        Args:
+            document_id: 文档的唯一标识符
+
+        Returns:
+            bool: True表示已存在，False表示不存在
+        """
+        return document_id in self._assistants
 
     def remove_assistant(self, document_id: str) -> bool:
         """

@@ -9,7 +9,7 @@
 from typing import Optional, Dict, Any
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTabWidget,
-    QFrame, QPushButton, QGridLayout, QTextEdit
+    QFrame, QPushButton, QGridLayout, QTextEdit, QScrollArea
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
@@ -501,15 +501,15 @@ class ContentToolsWidget(QWidget):
         """清理资源"""
         pass
 
-# 简单的日志记录器
+# 统一的日志记录器
 try:
     from src.shared.utils.logger import get_logger
+    logger = get_logger(__name__)
 except ImportError:
+    # 回退到标准库日志（仅在开发环境或特殊情况下）
     import logging
-    def get_logger(name):
-        return logging.getLogger(name)
-
-logger = get_logger(__name__)
+    logger = logging.getLogger(__name__)
+    logger.warning("无法导入统一日志模块，使用标准库日志")
 
 
 class ComprehensiveGlobalAIPanel(QWidget):
@@ -557,19 +557,32 @@ class ComprehensiveGlobalAIPanel(QWidget):
     def _setup_ui(self):
         """设置UI"""
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(10)
-        
+        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(5)
+
         # 标题区域
         self._create_header(layout)
-        
+
+        # 创建滚动区域包装主要内容
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+
+        # 主要内容容器
+        content_widget = QWidget()
+        content_layout = QVBoxLayout(content_widget)
+        content_layout.setContentsMargins(5, 5, 5, 5)
+        content_layout.setSpacing(10)
+
         # 主要内容区域 - 使用标签页
         self.main_tabs = QTabWidget()
-        
+
         # 写作助手标签页
         self.writing_assistant = WritingAssistantWidget(self.ai_service)
         self.main_tabs.addTab(self.writing_assistant, "🤖 写作助手")
-        
+
         # 项目分析标签页 - 使用完整版本
         try:
             from src.presentation.widgets.project_analyzer import ProjectAnalyzerWidget as FullProjectAnalyzer
@@ -582,11 +595,15 @@ class ComprehensiveGlobalAIPanel(QWidget):
         # 内容工具标签页
         self.content_tools = ContentToolsWidget(self.ai_service)
         self.main_tabs.addTab(self.content_tools, "🛠️ 内容工具")
-        
-        layout.addWidget(self.main_tabs)
-        
+
+        content_layout.addWidget(self.main_tabs)
+
         # 状态栏
-        self._create_status_bar(layout)
+        self._create_status_bar(content_layout)
+
+        # 将内容容器设置到滚动区域
+        scroll_area.setWidget(content_widget)
+        layout.addWidget(scroll_area)
         
     def _create_header(self, layout):
         """创建头部区域"""

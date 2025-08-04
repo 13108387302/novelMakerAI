@@ -283,8 +283,170 @@ class PluginManagerDialog(QDialog):
     
     def _apply_styles(self):
         """应用样式 - 使用主题管理器"""
-        # 移除硬编码样式，使用主题管理器
-        pass
+        try:
+            from src.presentation.styles.theme_manager import ThemeManager
+            theme_manager = ThemeManager()
+
+            # 应用插件管理器对话框样式
+            dialog_style = """
+            QDialog {
+                background-color: #f8f9fa;
+                border: 1px solid #dee2e6;
+            }
+
+            QTreeWidget {
+                background-color: white;
+                border: 1px solid #dee2e6;
+                border-radius: 4px;
+                selection-background-color: #e3f2fd;
+                alternate-background-color: #f8f9fa;
+            }
+
+            QTreeWidget::item {
+                padding: 8px;
+                border-bottom: 1px solid #f0f0f0;
+            }
+
+            QTreeWidget::item:selected {
+                background-color: #e3f2fd;
+                color: #1976d2;
+            }
+
+            QTreeWidget::item:hover {
+                background-color: #f5f5f5;
+            }
+
+            QTextEdit {
+                background-color: white;
+                border: 1px solid #dee2e6;
+                border-radius: 4px;
+                padding: 8px;
+                font-family: 'Consolas', 'Monaco', monospace;
+                font-size: 12px;
+            }
+
+            QPushButton {
+                background-color: #ffffff;
+                border: 1px solid #dee2e6;
+                border-radius: 4px;
+                padding: 8px 16px;
+                font-weight: 500;
+                min-width: 80px;
+            }
+
+            QPushButton:hover {
+                background-color: #f8f9fa;
+                border-color: #adb5bd;
+            }
+
+            QPushButton:pressed {
+                background-color: #e9ecef;
+            }
+
+            QPushButton:disabled {
+                background-color: #f8f9fa;
+                color: #6c757d;
+                border-color: #dee2e6;
+            }
+
+            /* 特殊按钮样式 */
+            QPushButton[class="primary"] {
+                background-color: #007bff;
+                color: white;
+                border-color: #007bff;
+            }
+
+            QPushButton[class="primary"]:hover {
+                background-color: #0056b3;
+                border-color: #0056b3;
+            }
+
+            QPushButton[class="success"] {
+                background-color: #28a745;
+                color: white;
+                border-color: #28a745;
+            }
+
+            QPushButton[class="success"]:hover {
+                background-color: #1e7e34;
+                border-color: #1e7e34;
+            }
+
+            QPushButton[class="danger"] {
+                background-color: #dc3545;
+                color: white;
+                border-color: #dc3545;
+            }
+
+            QPushButton[class="danger"]:hover {
+                background-color: #c82333;
+                border-color: #c82333;
+            }
+
+            QPushButton[class="warning"] {
+                background-color: #ffc107;
+                color: #212529;
+                border-color: #ffc107;
+            }
+
+            QPushButton[class="warning"]:hover {
+                background-color: #e0a800;
+                border-color: #e0a800;
+            }
+
+            QLabel {
+                color: #495057;
+            }
+
+            QLabel[class="title"] {
+                font-size: 14px;
+                font-weight: bold;
+                color: #212529;
+            }
+
+            QLabel[class="subtitle"] {
+                font-size: 12px;
+                color: #6c757d;
+            }
+
+            QSplitter::handle {
+                background-color: #dee2e6;
+                width: 2px;
+                height: 2px;
+            }
+
+            QSplitter::handle:hover {
+                background-color: #adb5bd;
+            }
+            """
+
+            self.setStyleSheet(dialog_style)
+
+            # 为特定按钮设置类属性
+            if hasattr(self, 'reload_all_btn'):
+                self.reload_all_btn.setProperty("class", "primary")
+
+        except Exception as e:
+            # 如果主题管理器不可用，使用基本样式
+            basic_style = """
+            QDialog {
+                background-color: #f8f9fa;
+            }
+            QPushButton {
+                padding: 8px 16px;
+                min-width: 80px;
+            }
+            QTreeWidget {
+                background-color: white;
+                border: 1px solid #ccc;
+            }
+            QTextEdit {
+                background-color: white;
+                border: 1px solid #ccc;
+                padding: 8px;
+            }
+            """
+            self.setStyleSheet(basic_style)
 
     
     def _load_plugins(self):

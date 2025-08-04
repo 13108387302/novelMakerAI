@@ -239,22 +239,126 @@ class ApplicationService:
     
     @safe_execute("资源清理")
     def _cleanup_resources(self) -> None:
-        """清理资源"""
-        try:
-            # 清理缓存
-            cache_dir = self.settings.cache_dir
-            if cache_dir.exists():
-                for item in cache_dir.iterdir():
-                    try:
-                        if item.is_file() and item.suffix == '.tmp':
-                            item.unlink()
-                            logger.debug(f"清理临时文件: {item}")
-                    except Exception as e:
-                        logger.warning(f"清理临时文件失败 {item}: {e}")
+        """清理资源（增强健壮性版本）"""
+        cleanup_tasks = []
 
-            logger.info("资源清理完成")
+        try:
+            # 1. 清理缓存目录
+            cache_dir = self.settings.cache_dir
+            if cache_dir and cache_dir.exists():
+                cleanup_tasks.append(("缓存目录", self._cleanup_cache_directory, cache_dir))
+
+            # 2. 清理临时文件
+            temp_dirs = [
+                self.settings.data_dir / "temp",
+                Path.home() / ".novel_editor" / "temp"
+            ]
+            for temp_dir in temp_dirs:
+                if temp_dir.exists():
+                    cleanup_tasks.append(("临时目录", self._cleanup_temp_directory, temp_dir))
+
+            # 3. 清理日志文件（保留最近7天）
+            log_dir = self.settings.data_dir / "logs"
+            if log_dir.exists():
+                cleanup_tasks.append(("日志目录", self._cleanup_log_directory, log_dir))
+
+            # 4. 清理缓存管理器
+            try:
+                from src.shared.utils.cache_manager import get_cache_manager
+                cache_manager = get_cache_manager()
+                cleanup_tasks.append(("缓存管理器", self._cleanup_cache_manager, cache_manager))
+            except Exception as cache_error:
+                logger.warning(f"获取缓存管理器失败: {cache_error}")
+
+            # 执行清理任务
+            success_count = 0
+            for task_name, task_func, task_arg in cleanup_tasks:
+                try:
+                    task_func(task_arg)
+                    success_count += 1
+                    logger.debug(f"✅ {task_name}清理成功")
+                except Exception as task_error:
+                    logger.warning(f"❌ {task_name}清理失败: {task_error}")
+
+            logger.info(f"资源清理完成: {success_count}/{len(cleanup_tasks)} 个任务成功")
 
         except Exception as e:
+            logger.error(f"资源清理失败: {e}")
+
+    def _cleanup_cache_directory(self, cache_dir: Path) -> None:
+        """清理缓存目录"""
+        cleaned_count = 0
+        for item in cache_dir.iterdir():
+            try:
+                if item.is_file():
+                    # 清理临时文件和过期缓存
+                    if item.suffix in ['.tmp', '.cache'] or 'temp' in item.name.lower():
+                        item.unlink()
+                        cleaned_count += 1
+                elif item.is_dir() and item.name.startswith('temp_'):
+                    # 清理临时目录
+                    import shutil
+                    shutil.rmtree(item)
+                    cleaned_count += 1
+            except Exception as e:
+                logger.warning(f"清理缓存项失败 {item}: {e}")
+
+        if cleaned_count > 0:
+            logger.info(f"清理了 {cleaned_count} 个缓存项")
+
+    def _cleanup_temp_directory(self, temp_dir: Path) -> None:
+        """清理临时目录"""
+        import time
+        current_time = time.time()
+        max_age = 24 * 3600  # 24小时
+        cleaned_count = 0
+
+        for item in temp_dir.iterdir():
+            try:
+                # 检查文件年龄
+                if item.stat().st_mtime < current_time - max_age:
+                    if item.is_file():
+                        item.unlink()
+                        cleaned_count += 1
+                    elif item.is_dir():
+                        import shutil
+                        shutil.rmtree(item)
+                        cleaned_count += 1
+            except Exception as e:
+                logger.warning(f"清理临时项失败 {item}: {e}")
+
+        if cleaned_count > 0:
+            logger.info(f"清理了 {cleaned_count} 个临时项")
+
+    def _cleanup_log_directory(self, log_dir: Path) -> None:
+        """清理日志目录（保留最近7天）"""
+        import time
+        current_time = time.time()
+        max_age = 7 * 24 * 3600  # 7天
+        cleaned_count = 0
+
+        for log_file in log_dir.glob('*.log*'):
+            try:
+                if log_file.stat().st_mtime < current_time - max_age:
+                    log_file.unlink()
+                    cleaned_count += 1
+            except Exception as e:
+                logger.warning(f"清理日志文件失败 {log_file}: {e}")
+
+        if cleaned_count > 0:
+            logger.info(f"清理了 {cleaned_count} 个过期日志文件")
+
+    def _cleanup_cache_manager(self, cache_manager) -> None:
+        """清理缓存管理器"""
+        try:
+            stats = cache_manager.get_stats()
+            logger.debug(f"缓存统计: {stats}")
+
+            # 可以在这里添加缓存清理逻辑
+            # 例如：清理过期缓存、压缩缓存等
+
+        except Exception as e:
+            logger.warning(f"清理缓存管理器失败: {e}")
             logger.error(f"资源清理失败: {e}")
     
     def get_application_info(self) -> dict:

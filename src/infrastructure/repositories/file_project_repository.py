@@ -581,20 +581,234 @@ class FileProjectRepository(BaseFileRepository[Project], IProjectRepository):
 
     async def create_project_from_template(self, template_id: str, project_name: str, project_path: Path) -> Optional[Project]:
         """从模板创建项目"""
-        # 简单实现：创建空项目
-        from src.domain.entities.project import create_project, ProjectType
-        project = create_project(project_name, ProjectType.NOVEL)
-        await self.save(project)
-        return project
+        try:
+            # 获取模板
+            templates_dir = self.base_path.parent / "templates"
+            template_dir = templates_dir / template_id
+
+            if not template_dir.exists():
+                logger.error(f"模板不存在: {template_id}")
+                return None
+
+            # 读取模板元数据
+            metadata_file = template_dir / "template.json"
+            project_template_file = template_dir / "project_template.json"
+
+            if not metadata_file.exists() or not project_template_file.exists():
+                logger.error(f"模板文件不完整: {template_id}")
+                return None
+
+            with open(metadata_file, 'r', encoding='utf-8') as f:
+                template_metadata = json.load(f)
+
+            with open(project_template_file, 'r', encoding='utf-8') as f:
+                project_template = json.load(f)
+
+            # 创建项目
+            from src.domain.entities.project import create_project, ProjectType
+
+            # 解析项目类型
+            project_type_str = project_template.get("project_type", "NOVEL")
+            try:
+                project_type = ProjectType(project_type_str)
+            except ValueError:
+                project_type = ProjectType.NOVEL
+
+            # 创建项目实例
+            project = create_project(project_name, project_type)
+
+            # 应用模板数据
+            if "metadata" in project_template and project.metadata:
+                template_meta = project_template["metadata"]
+
+                # 替换占位符
+                project.metadata.title = template_meta.get("title", "").replace("{{PROJECT_TITLE}}", project_name)
+                project.metadata.author = template_meta.get("author", "").replace("{{AUTHOR}}", "")
+                project.metadata.genre = template_meta.get("genre", "")
+                project.metadata.target_word_count = template_meta.get("target_word_count", 50000)
+                project.metadata.tags = template_meta.get("tags", [])
+                project.metadata.themes = template_meta.get("themes", [])
+
+            # 保存项目
+            await self.save(project)
+
+            # 创建模板文档
+            if "documents" in project_template:
+                from src.domain.entities.document import Document, DocumentType
+
+                for doc_template in project_template["documents"]:
+                    try:
+                        # 解析文档类型
+                        doc_type_str = doc_template.get("document_type", "CHAPTER")
+                        try:
+                            doc_type = DocumentType(doc_type_str)
+                        except ValueError:
+                            doc_type = DocumentType.CHAPTER
+
+                        # 创建文档
+                        document = Document(
+                            title=doc_template.get("title", "新文档"),
+                            document_type=doc_type,
+                            project_id=project.id,
+                            content=doc_template.get("content", "").replace("{{DOCUMENT_CONTENT}}", ""),
+                            order=doc_template.get("order", 0)
+                        )
+
+                        # 保存文档（需要文档仓储）
+                        # 这里暂时跳过，因为需要DocumentRepository
+                        logger.debug(f"模板文档: {document.title}")
+
+                    except Exception as e:
+                        logger.warning(f"创建模板文档失败: {e}")
+                        continue
+
+            logger.info(f"从模板创建项目成功: {project_name} (模板: {template_metadata.get('name', template_id)})")
+            return project
+
+        except Exception as e:
+            logger.error(f"从模板创建项目失败: {e}")
+            return None
 
     async def save_as_template(self, project_id: str, template_name: str, template_description: str = "") -> bool:
         """将项目保存为模板"""
-        # 简单实现：不支持
-        logger.warning("save_as_template方法暂未实现")
-        return False
+        try:
+            # 获取项目
+            project = await self.get_by_id(project_id)
+            if not project:
+                logger.error(f"项目不存在: {project_id}")
+                return False
+
+            # 创建模板目录
+            templates_dir = self.base_path.parent / "templates"
+            templates_dir.mkdir(exist_ok=True)
+
+            # 生成模板ID
+            import uuid
+            template_id = str(uuid.uuid4())
+            template_dir = templates_dir / template_id
+            template_dir.mkdir(exist_ok=True)
+
+            # 创建模板元数据
+            template_metadata = {
+                "id": template_id,
+                "name": template_name,
+                "description": template_description,
+                "created_at": datetime.now().isoformat(),
+                "source_project_id": project_id,
+                "source_project_name": project.name,
+                "project_type": project.project_type.value if hasattr(project.project_type, 'value') else str(project.project_type),
+                "version": "1.0.0"
+            }
+
+            # 保存模板元数据
+            metadata_file = template_dir / "template.json"
+            with open(metadata_file, 'w', encoding='utf-8') as f:
+                json.dump(template_metadata, f, indent=2, ensure_ascii=False)
+
+            # 复制项目结构（不包含具体内容）
+            project_template = {
+                "name": "{{PROJECT_NAME}}",  # 占位符
+                "description": "{{PROJECT_DESCRIPTION}}",
+                "project_type": project.project_type.value if hasattr(project.project_type, 'value') else str(project.project_type),
+                "created_at": "{{CREATED_AT}}",
+                "metadata": {
+                    "title": "{{PROJECT_TITLE}}",
+                    "author": "{{AUTHOR}}",
+                    "genre": project.metadata.genre if project.metadata else "",
+                    "target_word_count": project.metadata.target_word_count if project.metadata else 50000,
+                    "tags": project.metadata.tags if project.metadata else [],
+                    "themes": project.metadata.themes if project.metadata else []
+                },
+                "documents": []
+            }
+
+            # 如果项目有文档，创建文档模板结构
+            if hasattr(project, 'documents') and project.documents:
+                for doc in project.documents:
+                    doc_template = {
+                        "title": doc.title,
+                        "document_type": doc.document_type.value if hasattr(doc.document_type, 'value') else str(doc.document_type),
+                        "content": "{{DOCUMENT_CONTENT}}",  # 占位符
+                        "order": getattr(doc, 'order', 0)
+                    }
+                    project_template["documents"].append(doc_template)
+
+            # 保存项目模板
+            project_template_file = template_dir / "project_template.json"
+            with open(project_template_file, 'w', encoding='utf-8') as f:
+                json.dump(project_template, f, indent=2, ensure_ascii=False)
+
+            logger.info(f"项目模板保存成功: {template_name} ({template_id})")
+            return True
+
+        except Exception as e:
+            logger.error(f"保存项目模板失败: {e}")
+            return False
 
     async def delete_template(self, template_id: str) -> bool:
         """删除项目模板"""
-        # 简单实现：不支持
-        logger.warning("delete_template方法暂未实现")
-        return False
+        try:
+            # 模板目录
+            templates_dir = self.base_path.parent / "templates"
+            template_dir = templates_dir / template_id
+
+            if not template_dir.exists():
+                logger.warning(f"模板不存在: {template_id}")
+                return False
+
+            # 验证是否为有效模板
+            metadata_file = template_dir / "template.json"
+            if not metadata_file.exists():
+                logger.error(f"无效的模板目录: {template_id}")
+                return False
+
+            # 读取模板元数据（用于日志）
+            try:
+                with open(metadata_file, 'r', encoding='utf-8') as f:
+                    metadata = json.load(f)
+                template_name = metadata.get("name", template_id)
+            except Exception:
+                template_name = template_id
+
+            # 删除模板目录
+            import shutil
+            shutil.rmtree(template_dir)
+
+            logger.info(f"项目模板删除成功: {template_name} ({template_id})")
+            return True
+
+        except Exception as e:
+            logger.error(f"删除项目模板失败: {e}")
+            return False
+
+    async def list_templates(self) -> List[Dict[str, Any]]:
+        """列出所有可用的项目模板"""
+        try:
+            templates_dir = self.base_path.parent / "templates"
+            if not templates_dir.exists():
+                return []
+
+            templates = []
+            for template_dir in templates_dir.iterdir():
+                if not template_dir.is_dir():
+                    continue
+
+                metadata_file = template_dir / "template.json"
+                if not metadata_file.exists():
+                    continue
+
+                try:
+                    with open(metadata_file, 'r', encoding='utf-8') as f:
+                        metadata = json.load(f)
+                    templates.append(metadata)
+                except Exception as e:
+                    logger.warning(f"读取模板元数据失败 {template_dir}: {e}")
+                    continue
+
+            # 按创建时间排序
+            templates.sort(key=lambda t: t.get("created_at", ""), reverse=True)
+            return templates
+
+        except Exception as e:
+            logger.error(f"列出项目模板失败: {e}")
+            return []

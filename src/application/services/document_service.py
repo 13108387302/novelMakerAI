@@ -6,17 +6,20 @@
 管理文档的创建、编辑、保存等操作
 """
 
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, TYPE_CHECKING
 from pathlib import Path
 
 from src.domain.entities.document import Document, DocumentType, DocumentStatus, create_document
 from src.domain.repositories.document_repository import IDocumentRepository
 from src.domain.events.document_events import (
-    DocumentCreatedEvent, DocumentOpenedEvent, DocumentClosedEvent, 
+    DocumentCreatedEvent, DocumentOpenedEvent, DocumentClosedEvent,
     DocumentSavedEvent, DocumentContentChangedEvent
 )
 from src.shared.events.event_bus import EventBus
 from src.shared.utils.logger import get_logger
+
+if TYPE_CHECKING:
+    from src.application.services.search.search_service_refactored import SearchService
 
 logger = get_logger(__name__)
 
@@ -45,7 +48,8 @@ class DocumentService:
     def __init__(
         self,
         document_repository: IDocumentRepository,
-        event_bus: EventBus
+        event_bus: EventBus,
+        search_service: Optional['SearchService'] = None
     ):
         """
         初始化文档服务
@@ -53,9 +57,11 @@ class DocumentService:
         Args:
             document_repository: 文档仓储接口实现
             event_bus: 事件总线用于发布文档相关事件
+            search_service: 搜索服务（可选，用于统一搜索功能）
         """
         self.document_repository = document_repository
         self.event_bus = event_bus
+        self.search_service = search_service
         self._open_documents: Dict[str, Document] = {}
         self._current_document_id: Optional[str] = None
     
@@ -345,31 +351,116 @@ class DocumentService:
             return []
     
     async def search_documents(
-        self, 
-        query: str, 
+        self,
+        query: str,
         project_id: Optional[str] = None
     ) -> List[Document]:
-        """搜索文档"""
+        """搜索文档（优先使用SearchService）"""
         try:
-            documents = await self.document_repository.search(query, project_id)
-            logger.info(f"文档搜索完成: 找到 {len(documents)} 个结果")
-            return documents
-            
+            # 如果有SearchService，使用统一的搜索功能
+            if self.search_service:
+                from src.application.services.search.search_models import SearchQuery, SearchOptions, SearchFilter
+
+                # 构建搜索查询
+                search_query = SearchQuery(
+                    text=query,
+                    options=SearchOptions(search_in_titles=True, search_in_content=True),
+                    filters=SearchFilter(projects={project_id} if project_id else set())
+                )
+
+                # 执行搜索
+                result_set = self.search_service.search(search_query)
+
+                # 转换结果为Document对象
+                documents = []
+                for result in result_set.results:
+                    if result.item_type == "document":
+                        document = await self.document_repository.get_by_id(result.item_id)
+                        if document:
+                            documents.append(document)
+
+                logger.info(f"文档搜索完成（使用SearchService）: 找到 {len(documents)} 个结果")
+                return documents
+
+            # 回退到仓储搜索
+            else:
+                documents = await self.document_repository.search(query, project_id)
+                logger.info(f"文档搜索完成（使用仓储）: 找到 {len(documents)} 个结果")
+                return documents
+
         except Exception as e:
             logger.error(f"搜索文档失败: {e}")
             return []
     
     async def search_content(
-        self, 
-        query: str, 
+        self,
+        query: str,
         project_id: Optional[str] = None
     ) -> List[Dict[str, Any]]:
-        """搜索文档内容"""
+        """
+        搜索文档内容（优先使用SearchService）
+
+        在文档内容中搜索指定的查询文本，优先使用统一的搜索服务。
+        如果搜索服务不可用，则回退到仓储层的搜索功能。
+
+        Args:
+            query: 搜索查询文本
+            project_id: 可选的项目ID，用于限制搜索范围
+
+        Returns:
+            List[Dict[str, Any]]: 搜索结果列表，包含匹配的文档信息
+        """
         try:
-            results = await self.document_repository.search_content(query, project_id)
-            logger.info(f"内容搜索完成: 找到 {len(results)} 个匹配")
-            return results
-            
+            # 如果有SearchService，使用统一的搜索功能
+            if self.search_service:
+                from src.application.services.search.search_models import SearchQuery, SearchOptions, SearchFilter
+
+                # 构建搜索查询
+                search_query = SearchQuery(
+                    text=query,
+                    options=SearchOptions(
+                        search_in_content=True,
+                        search_in_titles=False,
+                        include_context=True,
+                        highlight_matches=True
+                    ),
+                    filters=SearchFilter(projects={project_id} if project_id else set())
+                )
+
+                # 执行搜索
+                result_set = self.search_service.search(search_query)
+
+                # 转换结果为内容匹配格式
+                content_results = []
+                for result in result_set.results:
+                    if result.item_type == "document":
+                        content_result = {
+                            "document_id": result.item_id,
+                            "document_title": result.title,
+                            "content_preview": result.content_preview,
+                            "relevance_score": result.relevance_score,
+                            "matches": [
+                                {
+                                    "line_number": match.line_number,
+                                    "line_content": match.line_content,
+                                    "highlighted_content": match.highlighted_content,
+                                    "context_before": match.context_before,
+                                    "context_after": match.context_after
+                                }
+                                for match in result.matches
+                            ]
+                        }
+                        content_results.append(content_result)
+
+                logger.info(f"内容搜索完成（使用SearchService）: 找到 {len(content_results)} 个匹配")
+                return content_results
+
+            # 回退到仓储搜索
+            else:
+                results = await self.document_repository.search_content(query, project_id)
+                logger.info(f"内容搜索完成（使用仓储）: 找到 {len(results)} 个匹配")
+                return results
+
         except Exception as e:
             logger.error(f"搜索内容失败: {e}")
             return []

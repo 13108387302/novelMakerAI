@@ -25,17 +25,29 @@ __description__ = "AI小说编辑器领域层"
 
 # 导出主要领域概念
 try:
-    from .entities.document import Document
+    from .entities.document import Document, DocumentType, DocumentStatus
     from .entities.character import Character
     from .entities.project.project import Project
 
     __all__ = [
+        # 核心实体
         "Document",
         "Character",
         "Project",
+
+        # 文档相关枚举
+        "DocumentType",
+        "DocumentStatus",
+
+        # 版本信息
         "__version__",
         "__description__"
     ]
-except ImportError:
-    # 如果导入失败，只导出版本信息
+
+except ImportError as e:
+    # 如果导入失败，记录错误并只导出版本信息
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.warning(f"领域层导入失败: {e}")
+
     __all__ = ["__version__", "__description__"]

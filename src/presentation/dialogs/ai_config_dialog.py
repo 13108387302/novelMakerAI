@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTabWidget, QWidget,
     QGroupBox, QGridLayout, QLabel, QLineEdit, QComboBox,
     QSpinBox, QDoubleSpinBox, QSlider, QCheckBox, QPushButton,
-    QTextEdit, QMessageBox, QProgressBar, QFrame
+    QTextEdit, QMessageBox, QProgressBar, QFrame, QScrollArea
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QThread
 from PyQt6.QtGui import QFont, QIcon
@@ -226,8 +226,16 @@ class AIConfigDialog(QDialog):
     
     def _create_openai_tab(self):
         """创建OpenAI配置标签页"""
+        # 创建滚动区域
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+
         tab = QWidget()
         layout = QVBoxLayout(tab)
+        layout.setContentsMargins(10, 10, 10, 10)
         
         # OpenAI基本配置
         basic_group = QGroupBox("🔑 基本配置")
@@ -284,9 +292,12 @@ class AIConfigDialog(QDialog):
         advanced_layout.addWidget(self.openai_timeout_spin, 2, 1)
         
         layout.addWidget(advanced_group)
-        
+
         layout.addStretch()
-        self.tab_widget.addTab(tab, "🔵 OpenAI")
+
+        # 将内容设置到滚动区域
+        scroll_area.setWidget(tab)
+        self.tab_widget.addTab(scroll_area, "🔵 OpenAI")
     
     def _create_deepseek_tab(self):
         """创建DeepSeek配置标签页"""

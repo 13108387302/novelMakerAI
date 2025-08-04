@@ -50,9 +50,9 @@ class DocumentAIPanel(QWidget):
     def _setup_ui(self):
         """设置UI"""
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(8)
-        
+        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(3)
+
         # 标题 - 根据文档类型显示不同图标和名称
         type_icons = {
             'chapter': '📖',
@@ -76,26 +76,39 @@ class DocumentAIPanel(QWidget):
         title_label.setFont(QFont("Microsoft YaHei UI", 10, QFont.Weight.Bold))
         title_label.setStyleSheet("color: #2196F3; padding: 4px;")
         layout.addWidget(title_label)
-        
+
+        # 创建滚动区域包装主要内容
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+
+        # 主要内容容器
+        content_widget = QWidget()
+        content_layout = QVBoxLayout(content_widget)
+        content_layout.setContentsMargins(3, 3, 3, 3)
+        content_layout.setSpacing(8)
+
         # 状态指示器
         self.status_frame = QFrame()
         self.status_frame.setFrameStyle(QFrame.Shape.Box)
         self.status_frame.setStyleSheet("QFrame { border: 1px solid #ddd; border-radius: 4px; padding: 4px; }")
         status_layout = QHBoxLayout(self.status_frame)
         status_layout.setContentsMargins(8, 4, 8, 4)
-        
+
         self.status_label = QLabel("就绪")
         self.status_label.setStyleSheet("color: #4CAF50; font-weight: bold;")
         status_layout.addWidget(self.status_label)
-        
+
         status_layout.addStretch()
-        
+
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
         self.progress_bar.setMaximumHeight(6)
         status_layout.addWidget(self.progress_bar)
-        
-        layout.addWidget(self.status_frame)
+
+        content_layout.addWidget(self.status_frame)
         
         # 快速操作按钮 - 根据文档类型显示不同功能
         quick_actions_group = QGroupBox(f"{name}专属功能")
@@ -173,8 +186,8 @@ class DocumentAIPanel(QWidget):
 
         quick_actions_layout.addLayout(control_layout)
 
-        layout.addWidget(quick_actions_group)
-        
+        content_layout.addWidget(quick_actions_group)
+
         # AI响应区域
         response_group = QGroupBox("AI响应")
         response_layout = QVBoxLayout(response_group)
@@ -220,11 +233,15 @@ class DocumentAIPanel(QWidget):
         response_actions_layout.addWidget(self.copy_btn)
         
         response_layout.addLayout(response_actions_layout)
-        
-        layout.addWidget(response_group)
-        
+
+        content_layout.addWidget(response_group)
+
         # 添加弹性空间
-        layout.addStretch()
+        content_layout.addStretch()
+
+        # 将内容容器设置到滚动区域
+        scroll_area.setWidget(content_widget)
+        layout.addWidget(scroll_area)
 
     def _create_type_specific_buttons(self, layout):
         """根据文档类型创建特定功能按钮"""

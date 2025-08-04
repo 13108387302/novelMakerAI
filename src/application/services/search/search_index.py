@@ -185,31 +185,44 @@ class SearchIndex:
         return positions
     
     def search(self, query: str, limit: int = 100) -> List[Dict[str, Any]]:
-        """搜索文档"""
+        """搜索文档（优化版本）"""
         try:
             with self._lock:
                 with sqlite3.connect(self.db_path) as conn:
                     conn.row_factory = sqlite3.Row
-                    
-                    # 简单的搜索实现
+
+                    # 优化的搜索实现
                     words = self._tokenize(query)
                     if not words:
                         return []
-                    
-                    # 构建搜索查询
-                    placeholders = " OR ".join(["word LIKE ?"] * len(words))
-                    search_params = [f"%{word}%" for word in words]
-                    
-                    cursor = conn.execute(f"""
-                        SELECT DISTINCT d.*, 
-                               SUM(w.frequency) as total_frequency
-                        FROM document_index d
-                        JOIN word_index w ON d.id = w.document_id
-                        WHERE {placeholders}
-                        GROUP BY d.id
-                        ORDER BY total_frequency DESC
-                        LIMIT ?
-                    """, search_params + [limit])
+
+                    # 使用更高效的查询策略
+                    if len(words) == 1:
+                        # 单词搜索优化
+                        cursor = conn.execute("""
+                            SELECT d.*, w.frequency as relevance_score
+                            FROM document_index d
+                            JOIN word_index w ON d.id = w.document_id
+                            WHERE w.word LIKE ?
+                            ORDER BY w.frequency DESC, d.updated_at DESC
+                            LIMIT ?
+                        """, [f"%{words[0]}%", limit])
+                    else:
+                        # 多词搜索优化
+                        placeholders = " OR ".join(["w.word LIKE ?"] * len(words))
+                        search_params = [f"%{word}%" for word in words]
+
+                        cursor = conn.execute(f"""
+                            SELECT d.*,
+                                   SUM(w.frequency) as relevance_score,
+                                   COUNT(DISTINCT w.word) as word_matches
+                            FROM document_index d
+                            JOIN word_index w ON d.id = w.document_id
+                            WHERE {placeholders}
+                            GROUP BY d.id
+                            ORDER BY word_matches DESC, relevance_score DESC, d.updated_at DESC
+                            LIMIT ?
+                        """, search_params + [limit])
                     
                     results = []
                     for row in cursor:

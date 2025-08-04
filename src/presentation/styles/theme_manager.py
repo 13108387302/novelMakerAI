@@ -331,7 +331,8 @@ class ThemeManager(QObject):
         
         QPushButton:pressed {{
             background-color: {colors['primary_dark']};
-            transform: translateY(1px);
+            padding-top: 9px;
+            padding-bottom: 7px;
         }}
         
         QPushButton:disabled {{

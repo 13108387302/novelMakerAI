@@ -330,24 +330,113 @@ class ProjectAnalyzerWidget(QWidget):
         
     def _extract_improvement_suggestions(self, analysis_result: str):
         """从分析结果中提取改进建议"""
-        # 简单的文本处理来提取建议部分
+        import re
+
         lines = analysis_result.split('\n')
         suggestions = []
-        
-        in_suggestions_section = False
+
+        # 多种模式匹配建议内容
+        suggestion_patterns = [
+            r'建议[:：]\s*(.*)',
+            r'改进[:：]\s*(.*)',
+            r'优化[:：]\s*(.*)',
+            r'提升[:：]\s*(.*)',
+            r'推荐[:：]\s*(.*)',
+            r'可以[:：]\s*(.*)',
+            r'应该[:：]\s*(.*)',
+            r'需要[:：]\s*(.*)',
+            r'^\d+[\.、]\s*(.*建议.*|.*改进.*|.*优化.*)',
+            r'^[•·-]\s*(.*建议.*|.*改进.*|.*优化.*)',
+        ]
+
+        # 关键词段落识别
+        suggestion_keywords = [
+            '建议', '改进', '优化', '提升', '推荐', '可以', '应该', '需要',
+            '不足', '问题', '缺陷', '弱点', '改善', '完善', '加强', '增强'
+        ]
+
+        # 第一步：直接模式匹配
         for line in lines:
-            if any(keyword in line.lower() for keyword in ['建议', '改进', '优化', '提升']):
-                in_suggestions_section = True
-                suggestions.append(line)
-            elif in_suggestions_section and line.strip():
-                suggestions.append(line)
-            elif in_suggestions_section and not line.strip():
-                break
-                
-        if suggestions:
-            self.improvement_suggestions.setText('\n'.join(suggestions))
+            line = line.strip()
+            if not line:
+                continue
+
+            for pattern in suggestion_patterns:
+                match = re.search(pattern, line, re.IGNORECASE)
+                if match:
+                    suggestion = match.group(1).strip() if match.groups() else line
+                    if suggestion and len(suggestion) > 5:  # 过滤太短的建议
+                        suggestions.append(f"• {suggestion}")
+
+        # 第二步：段落级别分析
+        if not suggestions:
+            current_paragraph = []
+            in_suggestion_context = False
+
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    if current_paragraph and in_suggestion_context:
+                        paragraph_text = ' '.join(current_paragraph)
+                        if len(paragraph_text) > 20:  # 过滤太短的段落
+                            suggestions.append(f"• {paragraph_text}")
+                    current_paragraph = []
+                    in_suggestion_context = False
+                    continue
+
+                # 检查是否包含建议关键词
+                contains_keywords = any(keyword in line for keyword in suggestion_keywords)
+
+                if contains_keywords:
+                    in_suggestion_context = True
+                    current_paragraph.append(line)
+                elif in_suggestion_context:
+                    current_paragraph.append(line)
+                else:
+                    current_paragraph = []
+
+            # 处理最后一个段落
+            if current_paragraph and in_suggestion_context:
+                paragraph_text = ' '.join(current_paragraph)
+                if len(paragraph_text) > 20:
+                    suggestions.append(f"• {paragraph_text}")
+
+        # 第三步：智能提取（如果前面都没找到）
+        if not suggestions:
+            # 寻找包含动词的句子，这些通常是建议
+            action_verbs = ['增加', '减少', '调整', '修改', '删除', '添加', '强化', '弱化', '重写', '重构']
+
+            for line in lines:
+                line = line.strip()
+                if any(verb in line for verb in action_verbs) and len(line) > 15:
+                    suggestions.append(f"• {line}")
+
+        # 去重和格式化
+        unique_suggestions = []
+        seen = set()
+        for suggestion in suggestions:
+            # 简单的去重逻辑
+            key = suggestion.lower().replace('•', '').strip()[:50]
+            if key not in seen and len(key) > 10:
+                seen.add(key)
+                unique_suggestions.append(suggestion)
+
+        # 限制建议数量
+        if len(unique_suggestions) > 10:
+            unique_suggestions = unique_suggestions[:10]
+            unique_suggestions.append("• ...")
+
+        if unique_suggestions:
+            formatted_suggestions = '\n'.join(unique_suggestions)
+            self.improvement_suggestions.setText(formatted_suggestions)
         else:
-            self.improvement_suggestions.setText("未能从分析结果中提取到具体的改进建议。")
+            self.improvement_suggestions.setText(
+                "未能从分析结果中提取到具体的改进建议。\n\n"
+                "建议：\n"
+                "• 检查分析结果的格式和内容\n"
+                "• 确保AI分析包含明确的改进建议\n"
+                "• 可以手动查看完整分析结果获取更多信息"
+            )
             
     def _reset_ui_state(self):
         """重置UI状态"""

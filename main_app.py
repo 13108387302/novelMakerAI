@@ -37,8 +37,12 @@ from src.application.services.document_service import DocumentService
 from src.application.services.ai_service import AIService
 from src.application.services.ai_assistant_manager import AIAssistantManager
 from src.application.services.settings_service import SettingsService
-from src.application.services.search_service import SearchService
+from src.application.services.search import SearchService
 from src.application.services.import_export_service import ImportExportService
+from src.application.services.backup_service import BackupService
+from src.application.services.template_service import TemplateService
+from src.application.services.specialized_ai_assistants import SpecializedAIManager
+from src.application.services.status_service import StatusService
 
 # 导入仓储层
 from src.domain.repositories.project_repository import IProjectRepository
@@ -381,11 +385,24 @@ class AINovelEditorApp:
                 event_bus=self.event_bus
             )
         )
+
+        # 先注册SearchService，因为DocumentService依赖它
+        self.container.register_singleton(
+            SearchService,
+            lambda: SearchService(
+                project_repository=self.container.get(IProjectRepository),
+                document_repository=self.container.get(IDocumentRepository),
+                event_bus=self.event_bus,
+                index_path=self.settings.data_dir / "search_index.db"
+            )
+        )
+
         self.container.register_singleton(
             DocumentService,
             lambda: DocumentService(
                 document_repository=self.container.get(IDocumentRepository),
-                event_bus=self.event_bus
+                event_bus=self.event_bus,
+                search_service=self.container.get(SearchService)
             )
         )
         # 注册AI服务（延迟解析避免循环依赖）
@@ -405,21 +422,44 @@ class AINovelEditorApp:
             lambda: SettingsService(self.settings, self.event_bus)
         )
         self.container.register_singleton(
-            SearchService,
-            lambda: SearchService(
-                project_repository=self.container.get(IProjectRepository),
-                document_repository=self.container.get(IDocumentRepository),
-                event_bus=self.event_bus,
-                data_dir=self.settings.data_dir
-            )
-        )
-        self.container.register_singleton(
             ImportExportService,
             lambda: ImportExportService(
                 project_repository=self.container.get(IProjectRepository),
                 document_repository=self.container.get(IDocumentRepository),
                 event_bus=self.event_bus
             )
+        )
+
+        # 注册备份服务
+        self.container.register_singleton(
+            BackupService,
+            lambda: BackupService(
+                project_repository=self.container.get(IProjectRepository),
+                document_repository=self.container.get(IDocumentRepository),
+                backup_dir=self.settings.data_dir / "backups"
+            )
+        )
+
+        # 注册模板服务
+        self.container.register_singleton(
+            TemplateService,
+            lambda: TemplateService(
+                templates_dir=self.settings.data_dir / "templates"
+            )
+        )
+
+        # 注册专属AI管理器
+        self.container.register_singleton(
+            SpecializedAIManager,
+            lambda: SpecializedAIManager(
+                ai_service=self.container.get(AIService)
+            )
+        )
+
+        # 注册状态服务
+        self.container.register_singleton(
+            StatusService,
+            lambda: StatusService()
         )
 
         # 注册控制器（手动解析依赖）
@@ -433,7 +473,8 @@ class AINovelEditorApp:
                 settings_service=self.container.get(SettingsService),
                 search_service=self.container.get(SearchService),
                 import_export_service=self.container.get(ImportExportService),
-                ai_assistant_manager=self.container.get(AIAssistantManager)
+                ai_assistant_manager=self.container.get(AIAssistantManager),
+                status_service=self.container.get(StatusService)
             )
         )
 

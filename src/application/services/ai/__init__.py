@@ -8,11 +8,7 @@ AI服务模块
 
 from .base_ai_service import (
     IAIService,
-    BaseAIService,
-    AIServiceError,
-    AIServiceUnavailableError,
-    AIRequestTimeoutError,
-    AIQuotaExceededError
+    BaseAIService
 )
 
 from .streaming_ai_service import StreamingAIService, StreamingAIWorker
@@ -23,11 +19,7 @@ __all__ = [
     # 基础接口和类
     'IAIService',
     'BaseAIService',
-    'AIServiceError',
-    'AIServiceUnavailableError', 
-    'AIRequestTimeoutError',
-    'AIQuotaExceededError',
-    
+
     # 服务组件
     'StreamingAIService',
     'StreamingAIWorker',

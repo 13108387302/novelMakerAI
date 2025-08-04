@@ -35,14 +35,12 @@ try:
     from .document_service import DocumentService
     from .ai_service import AIService
     from .settings_service import SettingsService
-    from .search_service import SearchService
+    from .search import SearchService
     from .import_export_service import ImportExportService
     from .backup_service import BackupService
-    from .analytics_service import AnalyticsService
     from .template_service import TemplateService
-    from .ux_service import UXService
     from .ai_assistant_manager import AIAssistantManager
-    from .specialized_ai_assistants import SpecializedAIAssistants
+    from .specialized_ai_assistants import SpecializedAIManager
 
     __all__ = [
         "ApplicationService",
@@ -53,11 +51,9 @@ try:
         "SearchService",
         "ImportExportService",
         "BackupService",
-        "AnalyticsService",
         "TemplateService",
-        "UXService",
         "AIAssistantManager",
-        "SpecializedAIAssistants",
+        "SpecializedAIManager",
         "__version__",
         "__description__"
     ]

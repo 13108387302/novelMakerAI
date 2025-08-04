@@ -340,25 +340,125 @@ class SpecializedAIManager:
             if not assistant:
                 return None
 
-            # 等待任务完成（简单实现）
+            # 创建结果容器
+            result_container = {"result": None, "error": None, "completed": False}
+
+            # 连接信号以获取结果
+            def on_result_ready(result_type: str, content: str):
+                result_container["result"] = content
+                result_container["completed"] = True
+
+            def on_error_occurred(error_type: str, error_msg: str):
+                result_container["error"] = error_msg
+                result_container["completed"] = True
+
+            # 连接信号
+            assistant.result_ready.connect(on_result_ready)
+            assistant.error_occurred.connect(on_error_occurred)
+
+            # 等待任务完成
             import time
-            timeout = 30  # 30秒超时
+            timeout = 60  # 60秒超时
             start_time = time.time()
 
-            while assistant.isRunning() and (time.time() - start_time) < timeout:
+            while (not result_container["completed"] and
+                   assistant.isRunning() and
+                   (time.time() - start_time) < timeout):
                 await asyncio.sleep(0.1)
 
-            if assistant.isRunning():
-                logger.warning(f"AI任务超时: {task_type}")
-                assistant.stop_task()
+            # 断开信号连接
+            try:
+                assistant.result_ready.disconnect(on_result_ready)
+                assistant.error_occurred.disconnect(on_error_occurred)
+            except:
+                pass  # 忽略断开连接的错误
+
+            if not result_container["completed"]:
+                if assistant.isRunning():
+                    logger.warning(f"AI任务超时: {task_type}")
+                    assistant.stop_task()
                 return None
 
-            # 这里应该有获取结果的方法，暂时返回成功标志
-            return "任务执行完成"
+            # 检查是否有错误
+            if result_container["error"]:
+                logger.error(f"AI任务执行失败: {result_container['error']}")
+                return None
+
+            # 返回结果
+            result = result_container["result"]
+            if result:
+                logger.info(f"AI任务执行成功: {task_type}")
+                return result
+            else:
+                logger.warning(f"AI任务完成但无结果: {task_type}")
+                return None
 
         except Exception as e:
             logger.error(f"异步执行AI任务失败: {e}")
             return None
+
+    async def execute_batch_tasks_async(self, tasks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """批量异步执行AI任务"""
+        results = []
+
+        for i, task in enumerate(tasks):
+            try:
+                document_type = task.get("document_type")
+                task_type = task.get("task_type")
+                task_data = task.get("task_data", {})
+
+                if not document_type or not task_type:
+                    results.append({
+                        "task_index": i,
+                        "success": False,
+                        "error": "缺少必要的任务参数"
+                    })
+                    continue
+
+                logger.info(f"执行批量任务 {i+1}/{len(tasks)}: {task_type}")
+
+                result = await self.execute_task_async(document_type, task_type, task_data)
+
+                results.append({
+                    "task_index": i,
+                    "task_type": task_type,
+                    "success": result is not None,
+                    "result": result,
+                    "error": None if result else "任务执行失败"
+                })
+
+            except Exception as e:
+                logger.error(f"批量任务执行失败 {i}: {e}")
+                results.append({
+                    "task_index": i,
+                    "success": False,
+                    "error": str(e)
+                })
+
+        # 统计结果
+        successful_count = sum(1 for r in results if r["success"])
+        logger.info(f"批量任务执行完成: {successful_count}/{len(tasks)} 成功")
+
+        return results
+
+    def get_task_progress(self, document_type: DocumentType) -> Dict[str, Any]:
+        """获取任务进度信息"""
+        assistant = self._assistants.get(document_type)
+        if not assistant:
+            return {"status": "no_assistant", "progress": 0}
+
+        if assistant.isRunning():
+            return {
+                "status": "running",
+                "progress": 50,  # 简单的进度指示
+                "message": "任务正在执行中..."
+            }
+        else:
+            return {
+                "status": "idle",
+                "progress": 0,
+                "message": "助手空闲"
+            }
     
     def stop_all_tasks(self):
         """停止所有任务"""

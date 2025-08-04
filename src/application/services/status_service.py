@@ -66,32 +66,46 @@ class StatusService(QObject):
         logger.info("状态服务初始化完成")
     
     def _collect_system_data(self):
-        """收集系统数据"""
+        """收集系统数据（优化版本，避免阻塞）"""
         try:
             # 收集内存使用率
             memory = psutil.virtual_memory()
             self.performance_data["memory_usage"] = memory.percent
 
-            # 收集CPU使用率（使用interval=1获取更准确的数据）
-            cpu_percent = psutil.cpu_percent(interval=1)
-            self.performance_data["cpu_usage"] = cpu_percent
+            # 优化的CPU使用率收集（避免阻塞）
+            # 使用非阻塞方式获取CPU使用率
+            if not hasattr(self, '_last_cpu_times'):
+                # 第一次调用，初始化CPU时间
+                self._last_cpu_times = psutil.cpu_times()
+                self._last_cpu_check = time.time()
+                # 使用一个合理的初始值
+                self.performance_data["cpu_usage"] = 5.0
+            else:
+                # 计算CPU使用率
+                current_cpu_times = psutil.cpu_times()
+                current_time = time.time()
 
-            # 如果CPU使用率为0，可能是第一次调用，使用备用方法
-            if cpu_percent == 0:
-                # 使用平均负载作为备用指标
-                try:
-                    load_avg = psutil.getloadavg()[0] if hasattr(psutil, 'getloadavg') else 0
-                    cpu_count = psutil.cpu_count()
-                    if cpu_count > 0:
-                        cpu_percent = min((load_avg / cpu_count) * 100, 100)
+                time_delta = current_time - self._last_cpu_check
+                if time_delta > 0:
+                    # 计算CPU使用率
+                    total_delta = sum(current_cpu_times) - sum(self._last_cpu_times)
+                    idle_delta = current_cpu_times.idle - self._last_cpu_times.idle
+
+                    if total_delta > 0:
+                        cpu_percent = max(0, min(100, (1 - idle_delta / total_delta) * 100))
                         self.performance_data["cpu_usage"] = cpu_percent
-                except:
-                    # 如果都失败了，使用一个合理的默认值
-                    self.performance_data["cpu_usage"] = 5.0
+
+                    # 更新记录
+                    self._last_cpu_times = current_cpu_times
+                    self._last_cpu_check = current_time
 
             # 检查性能警告
             if memory.percent > 80:
                 self.performance_warning.emit(f"内存使用率过高: {memory.percent:.1f}%")
+
+            cpu_usage = self.performance_data.get("cpu_usage", 0)
+            if cpu_usage > 90:
+                self.performance_warning.emit(f"CPU使用率过高: {cpu_usage:.1f}%")
 
             if self.performance_data["cpu_usage"] > 80:
                 self.performance_warning.emit(f"CPU使用率过高: {self.performance_data['cpu_usage']:.1f}%")

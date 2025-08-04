@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QWidget, QLabel, QLineEdit, QPushButton, QCheckBox, QComboBox,
     QSpinBox, QSlider, QGroupBox, QColorDialog, QFontDialog,
     QFileDialog, QMessageBox, QListWidget, QListWidgetItem,
-    QTextEdit, QScrollArea
+    QTextEdit, QScrollArea, QFrame
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont, QColor, QPalette
@@ -100,8 +100,16 @@ class SettingsDialog(QDialog):
     
     def _create_general_tab(self):
         """创建常规设置标签页"""
+        # 创建滚动区域
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+
         tab = QWidget()
         layout = QVBoxLayout(tab)
+        layout.setContentsMargins(10, 10, 10, 10)
         
         # 用户信息
         user_group = QGroupBox("用户信息")
@@ -157,14 +165,25 @@ class SettingsDialog(QDialog):
         locale_layout.addWidget(self.language_combo, 0, 1)
         
         layout.addWidget(locale_group)
-        
+
         layout.addStretch()
-        self.tab_widget.addTab(tab, "🏠 常规")
+
+        # 将内容设置到滚动区域
+        scroll_area.setWidget(tab)
+        self.tab_widget.addTab(scroll_area, "🏠 常规")
     
     def _create_editor_tab(self):
         """创建编辑器设置标签页"""
+        # 创建滚动区域
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+
         tab = QWidget()
         layout = QVBoxLayout(tab)
+        layout.setContentsMargins(10, 10, 10, 10)
         
         # 编辑器外观
         appearance_group = QGroupBox("编辑器外观")
@@ -229,14 +248,25 @@ class SettingsDialog(QDialog):
         autosave_layout.addWidget(self.autosave_interval_spin, 0, 1)
         
         layout.addWidget(autosave_group)
-        
+
         layout.addStretch()
-        self.tab_widget.addTab(tab, "✏️ 编辑器")
+
+        # 将内容设置到滚动区域
+        scroll_area.setWidget(tab)
+        self.tab_widget.addTab(scroll_area, "✏️ 编辑器")
     
     def _create_ai_tab(self):
         """创建AI设置标签页"""
+        # 创建滚动区域
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+
         tab = QWidget()
         layout = QVBoxLayout(tab)
+        layout.setContentsMargins(10, 10, 10, 10)
         
         # AI服务配置
         service_group = QGroupBox("AI服务配置")
@@ -296,9 +326,12 @@ class SettingsDialog(QDialog):
         features_layout.addWidget(self.show_confidence_check)
         
         layout.addWidget(features_group)
-        
+
         layout.addStretch()
-        self.tab_widget.addTab(tab, "🤖 AI助手")
+
+        # 将内容设置到滚动区域
+        scroll_area.setWidget(tab)
+        self.tab_widget.addTab(scroll_area, "🤖 AI助手")
     
     def _create_appearance_tab(self):
         """创建外观设置标签页"""

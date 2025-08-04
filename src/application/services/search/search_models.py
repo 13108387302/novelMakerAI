@@ -67,13 +67,19 @@ class SearchHistoryItem:
 
 @dataclass
 class SearchStatistics:
-    """搜索统计"""
+    """搜索统计（增强健壮性版本）"""
     total_searches: int = 0
     total_results: int = 0
     average_results_per_search: float = 0.0
     most_searched_terms: Dict[str, int] = field(default_factory=dict)
     search_frequency_by_hour: Dict[int, int] = field(default_factory=dict)
     last_updated: datetime = field(default_factory=datetime.now)
+
+    # 健壮性统计
+    timeout_count: int = 0
+    error_count: int = 0
+    empty_query_count: int = 0
+    long_query_count: int = 0
 
 
 @dataclass

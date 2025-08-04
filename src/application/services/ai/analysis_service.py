@@ -157,7 +157,22 @@ class AnalysisService(BaseAIService):
         summary_type: str = "brief",
         max_length: Optional[int] = None
     ) -> str:
-        """生成文本摘要"""
+        """
+        生成文本摘要
+
+        使用AI模型对输入文本生成摘要，支持不同的摘要类型和长度限制。
+
+        Args:
+            text: 要生成摘要的原始文本
+            summary_type: 摘要类型，可选值："brief"（简要）、"detailed"（详细）
+            max_length: 摘要的最大长度限制，None表示使用默认长度
+
+        Returns:
+            str: 生成的文本摘要
+
+        Raises:
+            Exception: 当摘要生成失败时抛出异常
+        """
         try:
             request_id = self._generate_request_id()
             
@@ -374,19 +389,161 @@ class AnalysisService(BaseAIService):
         
     def _parse_theme_analysis(self, response: str) -> Dict[str, Any]:
         """解析主题分析结果"""
-        return {
+        import re
+
+        result = {
             "raw_analysis": response,
             "analysis_type": "theme",
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
+            "themes": [],
+            "main_theme": "",
+            "sub_themes": [],
+            "theme_development": "",
+            "symbolic_elements": [],
+            "emotional_tone": "",
+            "suggestions": []
         }
+
+        lines = response.split('\n')
+        current_section = None
+
+        # 解析结构化内容
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+
+            # 识别主题
+            theme_match = re.search(r'主题[:：]\s*(.*)', line, re.IGNORECASE)
+            if theme_match:
+                result["main_theme"] = theme_match.group(1).strip()
+                continue
+
+            # 识别子主题
+            sub_theme_match = re.search(r'子主题[:：]\s*(.*)', line, re.IGNORECASE)
+            if sub_theme_match:
+                result["sub_themes"].append(sub_theme_match.group(1).strip())
+                continue
+
+            # 识别象征元素
+            symbol_match = re.search(r'象征[:：]\s*(.*)', line, re.IGNORECASE)
+            if symbol_match:
+                result["symbolic_elements"].append(symbol_match.group(1).strip())
+                continue
+
+            # 识别情感基调
+            tone_match = re.search(r'(情感|基调|氛围)[:：]\s*(.*)', line, re.IGNORECASE)
+            if tone_match:
+                result["emotional_tone"] = tone_match.group(2).strip()
+                continue
+
+            # 识别建议
+            suggestion_match = re.search(r'建议[:：]\s*(.*)', line, re.IGNORECASE)
+            if suggestion_match:
+                result["suggestions"].append(suggestion_match.group(1).strip())
+                continue
+
+            # 通用主题提取
+            if any(keyword in line for keyword in ['主题', '思想', '内涵', '意义']):
+                if len(line) > 10 and line not in result["themes"]:
+                    result["themes"].append(line)
+
+        # 如果没有找到主主题，尝试从themes中选择第一个
+        if not result["main_theme"] and result["themes"]:
+            result["main_theme"] = result["themes"][0]
+
+        return result
         
     def _parse_readability_analysis(self, response: str) -> Dict[str, Any]:
         """解析可读性分析结果"""
-        return {
+        import re
+
+        result = {
             "raw_analysis": response,
             "analysis_type": "readability",
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
+            "readability_score": None,
+            "reading_level": "",
+            "sentence_complexity": "",
+            "vocabulary_level": "",
+            "text_flow": "",
+            "issues": [],
+            "strengths": [],
+            "suggestions": []
         }
+
+        lines = response.split('\n')
+
+        # 解析结构化内容
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+
+            # 识别可读性评分
+            score_match = re.search(r'(可读性|评分|得分)[:：]\s*(\d+(?:\.\d+)?)', line, re.IGNORECASE)
+            if score_match:
+                try:
+                    result["readability_score"] = float(score_match.group(2))
+                except ValueError:
+                    pass
+                continue
+
+            # 识别阅读水平
+            level_match = re.search(r'(阅读|水平|等级)[:：]\s*(.*)', line, re.IGNORECASE)
+            if level_match:
+                result["reading_level"] = level_match.group(2).strip()
+                continue
+
+            # 识别句子复杂度
+            complexity_match = re.search(r'(句子|复杂度|结构)[:：]\s*(.*)', line, re.IGNORECASE)
+            if complexity_match:
+                result["sentence_complexity"] = complexity_match.group(2).strip()
+                continue
+
+            # 识别词汇水平
+            vocab_match = re.search(r'(词汇|用词)[:：]\s*(.*)', line, re.IGNORECASE)
+            if vocab_match:
+                result["vocabulary_level"] = vocab_match.group(2).strip()
+                continue
+
+            # 识别文本流畅性
+            flow_match = re.search(r'(流畅|连贯|衔接)[:：]\s*(.*)', line, re.IGNORECASE)
+            if flow_match:
+                result["text_flow"] = flow_match.group(2).strip()
+                continue
+
+            # 识别问题
+            issue_keywords = ['问题', '缺陷', '不足', '困难', '障碍', '错误']
+            if any(keyword in line for keyword in issue_keywords):
+                if len(line) > 10:
+                    result["issues"].append(line)
+                continue
+
+            # 识别优点
+            strength_keywords = ['优点', '长处', '优势', '亮点', '特色', '成功']
+            if any(keyword in line for keyword in strength_keywords):
+                if len(line) > 10:
+                    result["strengths"].append(line)
+                continue
+
+            # 识别建议
+            suggestion_match = re.search(r'建议[:：]\s*(.*)', line, re.IGNORECASE)
+            if suggestion_match:
+                result["suggestions"].append(suggestion_match.group(1).strip())
+                continue
+
+        # 如果没有找到评分，尝试从文本中推断
+        if result["readability_score"] is None:
+            # 简单的启发式评分
+            if any(word in response.lower() for word in ['优秀', '很好', '良好']):
+                result["readability_score"] = 8.0
+            elif any(word in response.lower() for word in ['一般', '中等', '普通']):
+                result["readability_score"] = 6.0
+            elif any(word in response.lower() for word in ['较差', '困难', '复杂']):
+                result["readability_score"] = 4.0
+
+        return result
         
     def get_supported_features(self) -> list[str]:
         """获取支持的功能"""

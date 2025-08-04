@@ -21,25 +21,48 @@ except ImportError:
     try:
         from .ai_workers import AITaskWorker, AITaskConfig, AITaskType
     except ImportError:
-        # 创建占位符类
+        # 创建占位符类（完善版本）
         from enum import Enum
-        from PyQt6.QtCore import QObject
+        from typing import Optional, Any, Dict
+        from PyQt6.QtCore import QObject, pyqtSignal
 
         class AITaskType(Enum):
+            """AI任务类型枚举"""
             IMPROVE_TEXT = "improve_text"
             EXPAND_CONTENT = "expand_content"
             SUMMARIZE = "summarize"
+            GENERATE_CHARACTER = "generate_character"
+            GENERATE_SCENE = "generate_scene"
+            GENERATE_PLOT = "generate_plot"
 
         class AITaskConfig:
-            def __init__(self, task_type, prompt, **kwargs):
+            """AI任务配置类"""
+            def __init__(self, task_type: AITaskType, prompt: str, **kwargs: Any) -> None:
                 self.task_type = task_type
                 self.prompt = prompt
+                self.context = kwargs.get('context', '')
+                self.max_length = kwargs.get('max_length', 1000)
+                self.temperature = kwargs.get('temperature', 0.7)
                 self.__dict__.update(kwargs)
 
         class AITaskWorker(QObject):
-            def __init__(self, ai_service=None):
+            """AI任务工作器占位符类"""
+
+            # 信号定义
+            task_completed = pyqtSignal(str)
+            task_failed = pyqtSignal(str)
+            task_progress = pyqtSignal(str)
+
+            def __init__(self, ai_service: Optional[Any] = None) -> None:
                 super().__init__()
                 self.ai_service = ai_service
+
+            def start_task(self, config: AITaskConfig) -> None:
+                """启动AI任务（占位符实现）"""
+                self.task_progress.emit("AI服务不可用，使用占位符响应")
+                # 模拟任务完成
+                placeholder_response = f"[占位符响应] 任务类型: {config.task_type.value}\n提示词: {config.prompt[:100]}..."
+                self.task_completed.emit(placeholder_response)
 from src.shared.utils.logger import get_logger
 
 logger = get_logger(__name__)

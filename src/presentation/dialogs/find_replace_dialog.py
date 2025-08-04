@@ -274,8 +274,112 @@ class FindReplaceDialog(QDialog):
     
     def _apply_styles(self):
         """应用样式 - 使用主题管理器"""
-        # 移除硬编码样式，使用主题管理器
-        pass
+        try:
+            from src.presentation.styles.theme_manager import ThemeManager
+            theme_manager = ThemeManager()
+
+            # 应用对话框样式
+            dialog_style = """
+            QDialog {
+                background-color: #f5f5f5;
+                border: 1px solid #d0d0d0;
+            }
+
+            QTabWidget::pane {
+                border: 1px solid #d0d0d0;
+                background-color: white;
+            }
+
+            QTabBar::tab {
+                background-color: #e0e0e0;
+                padding: 8px 16px;
+                margin-right: 2px;
+                border-top-left-radius: 4px;
+                border-top-right-radius: 4px;
+            }
+
+            QTabBar::tab:selected {
+                background-color: white;
+                border-bottom: 1px solid white;
+            }
+
+            QLineEdit {
+                padding: 6px;
+                border: 1px solid #d0d0d0;
+                border-radius: 3px;
+                background-color: white;
+            }
+
+            QLineEdit:focus {
+                border-color: #0078d4;
+            }
+
+            QPushButton {
+                padding: 6px 12px;
+                border: 1px solid #d0d0d0;
+                border-radius: 3px;
+                background-color: #f0f0f0;
+                min-width: 80px;
+            }
+
+            QPushButton:hover {
+                background-color: #e0e0e0;
+                border-color: #b0b0b0;
+            }
+
+            QPushButton:pressed {
+                background-color: #d0d0d0;
+            }
+
+            QPushButton:default {
+                background-color: #0078d4;
+                color: white;
+                border-color: #0078d4;
+            }
+
+            QPushButton:default:hover {
+                background-color: #106ebe;
+            }
+
+            QCheckBox {
+                spacing: 8px;
+            }
+
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
+                border: 1px solid #d0d0d0;
+                border-radius: 2px;
+                background-color: white;
+            }
+
+            QCheckBox::indicator:checked {
+                background-color: #0078d4;
+                border-color: #0078d4;
+            }
+
+            QLabel {
+                color: #333333;
+            }
+            """
+
+            self.setStyleSheet(dialog_style)
+
+        except Exception as e:
+            # 如果主题管理器不可用，使用基本样式
+            basic_style = """
+            QDialog {
+                background-color: #f5f5f5;
+            }
+            QPushButton {
+                padding: 6px 12px;
+                min-width: 80px;
+            }
+            QLineEdit {
+                padding: 6px;
+            }
+            """
+            self.setStyleSheet(basic_style)
 
     
     def _get_search_options(self) -> dict:

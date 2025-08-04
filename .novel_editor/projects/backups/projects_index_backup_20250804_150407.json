@@ -1,0 +1,43 @@
+{
+  "8afffb5d-2f4c-400e-ae05-98ccdb4e1c3c": {
+    "name": "srs",
+    "project_type": "novel",
+    "status": "active",
+    "created_at": "2025-08-04T13:23:49.827834",
+    "word_count": 0,
+    "id": "8afffb5d-2f4c-400e-ae05-98ccdb4e1c3c",
+    "file_path": "E:\\code\\ai辅助写小说\\重构整个项目\\.novel_editor\\projects\\8afffb5d-2f4c-400e-ae05-98ccdb4e1c3c.json",
+    "updated_at": "2025-08-04T13:23:49.834836"
+  },
+  "1e3d6ca8-f4fa-4246-842e-6a2f749c404b": {
+    "name": "s",
+    "project_type": "novel",
+    "status": "active",
+    "created_at": "2025-08-04T14:48:11.634657",
+    "word_count": 0,
+    "id": "1e3d6ca8-f4fa-4246-842e-6a2f749c404b",
+    "file_path": "E:\\code\\ai辅助写小说\\重构整个项目\\.novel_editor\\projects\\1e3d6ca8-f4fa-4246-842e-6a2f749c404b.json",
+    "updated_at": "2025-08-04T14:48:11.644657"
+  },
+  "76650c94-7a24-4dde-a126-41860d47e99b": {
+    "name": "s",
+    "project_type": "novel",
+    "status": "active",
+    "created_at": "2025-08-04T14:49:16.007428",
+    "word_count": 0,
+    "id": "76650c94-7a24-4dde-a126-41860d47e99b",
+    "file_path": "E:\\code\\ai辅助写小说\\重构整个项目\\.novel_editor\\projects\\76650c94-7a24-4dde-a126-41860d47e99b.json",
+    "updated_at": "2025-08-04T15:04:07.318928",
+    "path": "E:\\code\\ai辅助写小说\\重构整个项目\\projects\\s"
+  },
+  "2af3aa9f-2377-48c5-8eaa-75d448594378": {
+    "name": "sd",
+    "project_type": "novel",
+    "status": "active",
+    "created_at": "2025-08-04T14:49:38.204233",
+    "word_count": 0,
+    "id": "2af3aa9f-2377-48c5-8eaa-75d448594378",
+    "file_path": "E:\\code\\ai辅助写小说\\重构整个项目\\.novel_editor\\projects\\2af3aa9f-2377-48c5-8eaa-75d448594378.json",
+    "updated_at": "2025-08-04T14:50:21.848120"
+  }
+}

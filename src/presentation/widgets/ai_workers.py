@@ -75,21 +75,35 @@ class RealTimeAIWorker(QThread):
         self._is_cancelled = False
 
     def run(self):
-        """运行AI任务"""
+        """运行AI任务（优化版本）"""
+        loop = None
         try:
             # 创建新的事件循环
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
 
-            try:
-                # 运行异步任务
-                loop.run_until_complete(self._execute_task())
-            finally:
-                loop.close()
+            # 运行异步任务
+            loop.run_until_complete(self._execute_task())
 
         except Exception as e:
             logger.error(f"AI任务执行失败: {e}")
             self.task_failed.emit(str(e))
+        finally:
+            # 确保事件循环正确关闭
+            if loop and not loop.is_closed():
+                try:
+                    # 取消所有未完成的任务
+                    pending = asyncio.all_tasks(loop)
+                    for task in pending:
+                        task.cancel()
+
+                    # 等待任务取消完成
+                    if pending:
+                        loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                except Exception as cleanup_error:
+                    logger.warning(f"清理AI任务时出错: {cleanup_error}")
+                finally:
+                    loop.close()
 
     async def _execute_task(self):
         """异步执行任务"""

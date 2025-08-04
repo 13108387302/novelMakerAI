@@ -61,54 +61,79 @@ def check_dependencies():
     
     return True
 
-def check_project_structure():
-    """检查项目结构"""
-    print("\n📁 检查项目结构...")
-    
+def check_project_structure() -> bool:
+    """
+    检查项目结构完整性
+
+    验证项目的目录结构和关键文件是否存在，确保项目结构符合预期。
+
+    Returns:
+        bool: 项目结构是否完整
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    logger.info("📁 检查项目结构...")
+
     required_dirs = [
         "src",
         "src/application",
-        "src/domain", 
+        "src/domain",
         "src/infrastructure",
         "src/presentation",
         "src/shared",
         "config",
         "plugins"
     ]
-    
+
     required_files = [
         "main_app.py",
         "config/settings.py",
         "src/__init__.py",
         "requirements.txt"
     ]
-    
+
     missing_items = []
-    
+
     # 检查目录
     for dir_path in required_dirs:
         full_path = PROJECT_ROOT / dir_path
         if full_path.exists() and full_path.is_dir():
-            print(f"✅ {dir_path}/")
+            logger.info(f"✅ {dir_path}/")
         else:
-            print(f"❌ {dir_path}/ - 目录不存在")
+            logger.error(f"❌ {dir_path}/ - 目录不存在")
             missing_items.append(dir_path)
-    
+
     # 检查文件
     for file_path in required_files:
         full_path = PROJECT_ROOT / file_path
         if full_path.exists() and full_path.is_file():
-            print(f"✅ {file_path}")
+            logger.info(f"✅ {file_path}")
         else:
-            print(f"❌ {file_path} - 文件不存在")
+            logger.error(f"❌ {file_path} - 文件不存在")
             missing_items.append(file_path)
-    
+
+    if missing_items:
+        logger.warning(f"发现 {len(missing_items)} 个缺失项目")
+    else:
+        logger.info("项目结构检查完成，所有必需项目都存在")
+
     return len(missing_items) == 0
 
-def check_imports():
-    """检查核心模块导入"""
-    print("\n🔧 检查核心模块导入...")
-    
+def check_imports() -> bool:
+    """
+    检查核心模块导入功能
+
+    验证项目的核心模块是否可以正常导入，确保模块依赖关系正确。
+
+    Returns:
+        bool: 所有核心模块是否可以正常导入
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    logger.info("🔧 检查核心模块导入...")
+
     test_imports = [
         ("config.settings", "get_settings"),
         ("src.shared.events.event_bus", "EventBus"),
@@ -224,11 +249,28 @@ def create_test_directories():
     
     return True
 
-async def main():
-    """主验证函数"""
-    print("🚀 AI小说编辑器安装验证")
-    print("=" * 50)
-    
+async def main() -> None:
+    """
+    主验证函数
+
+    执行完整的安装验证流程，包括Python版本、依赖包、项目结构、
+    模块导入、配置系统、测试目录和异步功能的检查。
+
+    Returns:
+        None
+    """
+    import logging
+
+    # 配置日志
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(levelname)s: %(message)s'
+    )
+    logger = logging.getLogger(__name__)
+
+    logger.info("🚀 AI小说编辑器安装验证")
+    logger.info("=" * 50)
+
     checks = [
         ("Python版本", check_python_version),
         ("依赖包", check_dependencies),
@@ -238,24 +280,25 @@ async def main():
         ("测试目录", create_test_directories),
         ("异步功能", check_async_functionality)
     ]
-    
+
     passed = 0
     total = len(checks)
-    
+
     for check_name, check_func in checks:
         try:
             if asyncio.iscoroutinefunction(check_func):
                 result = await check_func()
             else:
                 result = check_func()
-                
+
             if result:
                 passed += 1
+                logger.info(f"✅ {check_name} 检查通过")
             else:
-                print(f"\n❌ {check_name} 检查失败")
-                
+                logger.error(f"❌ {check_name} 检查失败")
+
         except Exception as e:
-            print(f"\n❌ {check_name} 检查出错: {e}")
+            logger.error(f"❌ {check_name} 检查出错: {e}")
     
     print("\n" + "=" * 50)
     print(f"📊 验证结果: {passed}/{total} 项检查通过")

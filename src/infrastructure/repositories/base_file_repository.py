@@ -7,8 +7,8 @@
 """
 
 import json
-import shutil
 import asyncio
+import shutil
 from pathlib import Path
 from typing import Dict, Any, Optional, List, TypeVar, Generic
 from datetime import datetime
@@ -16,6 +16,7 @@ from abc import ABC, abstractmethod
 
 from src.shared.utils.logger import get_logger
 from src.shared.utils.error_handler import handle_async_errors, RepositoryError
+from src.shared.utils.file_utils import FileManager
 
 logger = get_logger(__name__)
 
@@ -28,15 +29,18 @@ class BaseFileRepository(Generic[T], ABC):
     def __init__(self, base_path: Optional[Path] = None, entity_name: str = "entity"):
         self.entity_name = entity_name
         self.base_path = base_path or Path.home() / ".novel_editor" / f"{entity_name}s"
-        self.base_path.mkdir(parents=True, exist_ok=True)
-        
+
+        # 使用FileManager进行文件操作
+        self.file_manager = FileManager()
+        self.file_manager.ensure_directory(self.base_path)
+
         # 索引文件
         self.index_file = self.base_path / f"{entity_name}s_index.json"
         self._ensure_index_file()
-        
+
         # 备份目录
         self.backup_path = self.base_path / "backups"
-        self.backup_path.mkdir(exist_ok=True)
+        self.file_manager.ensure_directory(self.backup_path)
     
     def _ensure_index_file(self) -> None:
         """确保索引文件存在"""

@@ -182,13 +182,14 @@ class NovelSyntaxHighlighter(QSyntaxHighlighter):
                                            QRegularExpression.PatternOption.MultilineOption)
         self._highlighting_rules.append((comment_pattern, comment_format))
         
-        # 特殊标记高亮（TODO, NOTE, FIXME等）
+        # 特殊标记高亮（开发注释标记）
         special_format = QTextCharFormat()
-        special_format.setForeground(QColor("#FFFFFF"))  # 白色
-        special_format.setBackground(QColor("#FF0000"))  # 红色背景
+        special_format.setForeground(QColor("#FFFFFF"))  # 白色文字
+        special_format.setBackground(QColor("#FF6B6B"))  # 温和的红色背景
         special_format.setFontWeight(QFont.Weight.Bold)
-        
-        special_pattern = QRegularExpression(r'\b(TODO|FIXME|NOTE|HACK|XXX|BUG)\b')
+
+        # 匹配常见的开发注释标记
+        special_pattern = QRegularExpression(r'\b(TODO|FIXME|NOTE|HACK|XXX|BUG|REVIEW|OPTIMIZE)\b')
         self._highlighting_rules.append((special_pattern, special_format))
         
         logger.info(f"语法高亮规则设置完成，共 {len(self._highlighting_rules)} 条规则")
