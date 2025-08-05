@@ -1,0 +1,57 @@
+{
+  "id": "text_processor",
+  "name": "文本处理器",
+  "version": "1.0.0",
+  "description": "提供基础的文本处理功能，如格式化、统计、转换等",
+  "author": "AI小说编辑器团队",
+  "homepage": "https://github.com/ai-novel-editor/plugins/text-processor",
+  "license": "MIT",
+  "type": "tool",
+  "entry_point": "plugin.py",
+  "dependencies": [],
+  "min_app_version": "2.0.0",
+  "max_app_version": "",
+  "tags": ["文本", "处理", "工具", "格式化", "统计"],
+  "settings_schema": {
+    "type": "object",
+    "properties": {
+      "auto_format": {
+        "type": "boolean",
+        "title": "自动格式化",
+        "description": "保存时自动格式化文本",
+        "default": false
+      },
+      "indent_size": {
+        "type": "integer",
+        "title": "缩进大小",
+        "description": "段落缩进的空格数",
+        "default": 2,
+        "minimum": 0,
+        "maximum": 8
+      },
+      "fix_punctuation": {
+        "type": "boolean",
+        "title": "自动修正标点",
+        "description": "自动修正常见的标点符号问题",
+        "default": true
+      }
+    }
+  },
+  "permissions": [
+    "read_document",
+    "write_document",
+    "create_menu",
+    "show_dialog"
+  ],
+  "resources": {
+    "icons": {
+      "16x16": "icons/icon-16.png",
+      "32x32": "icons/icon-32.png",
+      "48x48": "icons/icon-48.png"
+    },
+    "screenshots": [
+      "screenshots/menu.png",
+      "screenshots/format.png"
+    ]
+  }
+}

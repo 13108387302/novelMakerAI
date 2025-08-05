@@ -1,0 +1,29 @@
+{
+  "id": "abf779d2-b610-417c-8b2b-b1b2b6464205",
+  "type": "character",
+  "project_id": "76650c94-7a24-4dde-a126-41860d47e99b",
+  "metadata": {
+    "title": "新角色",
+    "description": "",
+    "tags": [],
+    "author": "",
+    "created_at": "2025-08-05T13:00:28.972091",
+    "updated_at": "2025-08-05T13:00:28.972091"
+  },
+  "statistics": {
+    "word_count": 20,
+    "character_count": 76,
+    "paragraph_count": 6,
+    "sentence_count": 1,
+    "reading_time_minutes": 0.08
+  },
+  "status": "draft",
+  "type_specific_data": {
+    "character_name": "",
+    "age": null,
+    "gender": "",
+    "occupation": "",
+    "personality_traits": [],
+    "relationships": {}
+  }
+}

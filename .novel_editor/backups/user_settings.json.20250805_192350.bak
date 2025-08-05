@@ -1,0 +1,88 @@
+{
+  "ui": {
+    "theme": "dark",
+    "language": "zh_CN",
+    "font_family": "Microsoft YaHei UI",
+    "font_size": 10,
+    "line_spacing": 1.5,
+    "auto_save_interval": 30,
+    "show_word_count": true,
+    "show_character_count": true,
+    "show_reading_time": true,
+    "enable_spell_check": true,
+    "enable_grammar_check": true,
+    "window_state": "",
+    "splitter_sizes": [
+      300,
+      800,
+      350
+    ],
+    "recent_projects_count": 10,
+    "last_opened_directory": "E:\\code\\ai辅助写小说\\重构整个项目\\projects\\s",
+    "recent_directories": [
+      "E:\\code\\ai辅助写小说\\重构整个项目\\projects\\s",
+      "E:\\code\\ai辅助写小说\\重构整个项目\\projects\\sd"
+    ],
+    "window_geometry": "AdnQywADAAAAAAAB////9AAABZ4AAANSAAAAAQAAABEAAAWeAAADUgAAAAAAAAAABaAAAAABAAAAEQAABZ4AAANS",
+    "dock_state": "AAAA/wAAAAD9AAAAAwAAAAAAAAEfAAACwvwCAAAAAfsAAAAYAHAAcgBvAGoAZQBjAHQAXwBkAG8AYwBrAQAAAF4AAALCAAAAVQD///8AAAABAAABZwAAAsL8AgAAAAL7AAAAFAByAGkAZwBoAHQAXwBkAG8AYwBrAQAAAF4AAALCAAADMwD////7AAAAFgBzAHQAYQB0AHUAcwBfAGQAbwBjAGsAAAABuwAAAWUAAAFlAP///wAAAAMAAAAAAAAAAPwBAAAAAfsAAAAWAG8AdQB0AHAAdQB0AF8AZABvAGMAawAAAAAA/////wAAAFEA////AAADEAAAAsIAAAAEAAAABAAAAAgAAAAI/AAAAAEAAAACAAAAAQAAABgAbQBhAGkAbgBfAHQAbwBvAGwAYgBhAHIBAAAAAP////8AAAAAAAAAAA==",
+    "auto_open_last_project": true,
+    "last_project_id": "76650c94-7a24-4dde-a126-41860d47e99b",
+    "last_project_path": "E:\\code\\ai辅助写小说\\重构整个项目\\projects\\s"
+  },
+  "editor": {
+    "tab_size": 4,
+    "word_wrap": true,
+    "show_line_numbers": false,
+    "highlight_current_line": true,
+    "auto_indent": true,
+    "smart_quotes": true,
+    "auto_complete": true,
+    "vim_mode": false,
+    "typewriter_mode": false,
+    "focus_mode": false,
+    "distraction_free": false
+  },
+  "ai": {
+    "default_provider": "deepseek",
+    "auto_suggestions": true,
+    "suggestion_delay": 2000,
+    "max_tokens": 2000,
+    "temperature": 0.7,
+    "enable_continuation": true,
+    "enable_dialogue_improvement": true,
+    "enable_scene_expansion": true,
+    "enable_style_analysis": true,
+    "cache_responses": true,
+    "show_confidence": true,
+    "openai_api_key": "",
+    "openai_base_url": "https://api.openai.com/v1",
+    "openai_model": "gpt-3.5-turbo",
+    "deepseek_api_key": "sk-c6f731ba5ad6448b953c42ab4df3074f",
+    "deepseek_base_url": "https://api.deepseek.com/v1",
+    "deepseek_model": "deepseek-chat",
+    "timeout": 30,
+    "retry_count": 3,
+    "stream_mode": true,
+    "enable_streaming": true
+  },
+  "project": {
+    "default_project_type": "novel",
+    "default_target_word_count": 80000,
+    "auto_backup": true,
+    "backup_interval": 3600,
+    "backup_count": 5,
+    "version_control": true,
+    "export_format": "docx",
+    "default_author": "",
+    "default_genre": ""
+  },
+  "advanced": {
+    "debug_mode": false,
+    "log_level": "INFO",
+    "performance_monitoring": false,
+    "crash_reporting": true,
+    "usage_analytics": true,
+    "check_updates": true,
+    "beta_features": false
+  }
+}

@@ -1,0 +1,51 @@
+AI模块旧文件清理日志
+清理时间: 2025-08-05T14:49:38.288964
+==================================================
+
+清理操作:
+  BACKUP: src/application/services/ai/base_ai_service.py
+  BACKUP: src/application/services/ai/cache_optimizer.py
+  BACKUP: src/application/services/ai/concurrency_optimizer.py
+  BACKUP: src/application/services/ai/core_abstractions.py
+  BACKUP: src/application/services/ai/function_modules.py
+  BACKUP: src/application/services/ai/performance_monitor.py
+  BACKUP: src/application/services/ai/providers.py
+  BACKUP: src/application/services/ai/ai_service_manager.py
+  BACKUP: src/presentation/widgets/ai/ai_component_factory.py
+  BACKUP: src/presentation/widgets/ai/ai_function_modules.py
+  BACKUP: src/presentation/widgets/ai/ai_widget_base.py
+  BACKUP: src/presentation/widgets/ai/content_generation_widget.py
+  BACKUP: src/presentation/widgets/ai/conversation_widget.py
+  BACKUP: src/presentation/widgets/ai/document_ai_panel_v2.py
+  BACKUP: src/presentation/widgets/ai/global_ai_panel_v2.py
+  DELETE: src/application/services/ai/base_ai_service.py
+  DELETE: src/application/services/ai/cache_optimizer.py
+  DELETE: src/application/services/ai/concurrency_optimizer.py
+  DELETE: src/application/services/ai/core_abstractions.py
+  DELETE: src/application/services/ai/function_modules.py
+  DELETE: src/application/services/ai/performance_monitor.py
+  DELETE: src/application/services/ai/providers.py
+  DELETE: src/application/services/ai/ai_service_manager.py
+  DELETE: src/presentation/widgets/ai/ai_component_factory.py
+  DELETE: src/presentation/widgets/ai/ai_function_modules.py
+  DELETE: src/presentation/widgets/ai/ai_widget_base.py
+  DELETE: src/presentation/widgets/ai/content_generation_widget.py
+  DELETE: src/presentation/widgets/ai/conversation_widget.py
+  DELETE: src/presentation/widgets/ai/document_ai_panel_v2.py
+  DELETE: src/presentation/widgets/ai/global_ai_panel_v2.py
+  DELETE_DIR: src/application/services/ai/__pycache__
+  DELETE_DIR: src/presentation/widgets/ai/__pycache__
+  UPDATE: src/presentation/widgets/ai/__init__.py
+
+==================================================
+清理完成。备份文件位于: E:\code\ai辅助写小说\重构整个项目\backup_deleted_ai_files
+如需恢复，请从备份目录复制文件。
+
+保留的新架构文件:
+  ✅ src/application/services/ai/__init__.py
+  ✅ src/application/services/ai/core/
+  ✅ src/application/services/ai/intelligence/
+  ✅ src/domain/ai/
+  ✅ src/infrastructure/ai/
+  ✅ src/presentation/widgets/ai/refactored/
+  ✅ src/presentation/widgets/ai/__init__.py

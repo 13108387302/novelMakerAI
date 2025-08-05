@@ -1,0 +1,253 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+应用程序常量
+
+定义应用程序中使用的常量
+"""
+
+from pathlib import Path
+
+
+# 应用程序信息
+APP_NAME = "AI小说编辑器"
+APP_VERSION = "2.0.0"
+APP_AUTHOR = "AI小说编辑器团队"
+APP_DESCRIPTION = "基于AI技术的智能小说创作工具"
+APP_COPYRIGHT = f"© 2024 {APP_AUTHOR}"
+
+# 文件和目录
+DEFAULT_PROJECT_EXTENSION = ".ainovel"
+DEFAULT_DOCUMENT_EXTENSION = ".txt"
+BACKUP_EXTENSION = ".backup"
+TEMP_EXTENSION = ".tmp"
+
+# 支持的文件格式
+SUPPORTED_PROJECT_FORMATS = [".ainovel", ".json"]
+SUPPORTED_DOCUMENT_FORMATS = [".txt", ".md", ".docx", ".pdf"]
+SUPPORTED_EXPORT_FORMATS = [".txt", ".md", ".docx", ".pdf", ".json", ".xlsx"]
+SUPPORTED_IMPORT_FORMATS = [".txt", ".md", ".docx", ".json"]
+
+# 文件大小限制（字节）
+MAX_PROJECT_SIZE = 100 * 1024 * 1024  # 100MB
+MAX_DOCUMENT_SIZE = 10 * 1024 * 1024   # 10MB
+MAX_BACKUP_SIZE = 50 * 1024 * 1024     # 50MB
+
+# 字数限制
+MAX_PROJECT_WORD_COUNT = 10000000      # 1000万字
+MAX_DOCUMENT_WORD_COUNT = 1000000      # 100万字
+MIN_WORD_COUNT_FOR_ANALYSIS = 100      # 分析最少字数
+
+# 默认设置值
+DEFAULT_AUTO_SAVE_INTERVAL = 30        # 秒
+DEFAULT_BACKUP_INTERVAL = 3600         # 秒
+DEFAULT_BACKUP_COUNT = 10              # 个
+DEFAULT_FONT_SIZE = 12                 # 像素
+DEFAULT_LINE_SPACING = 1.2             # 倍数
+DEFAULT_TAB_WIDTH = 4                  # 字符
+DEFAULT_WORD_GOAL_DAILY = 1000         # 字
+DEFAULT_WORD_GOAL_WEEKLY = 7000        # 字
+DEFAULT_WORD_GOAL_MONTHLY = 30000      # 字
+
+# AI设置默认值
+DEFAULT_AI_CREATIVITY_LEVEL = 0.7      # 0.0-1.0
+DEFAULT_AI_RESPONSE_LENGTH = "medium"  # short, medium, long
+DEFAULT_AI_SUGGESTION_DELAY = 1000     # 毫秒
+DEFAULT_AI_MODEL = "default"
+
+# UI设置
+DEFAULT_WINDOW_WIDTH = 1600            # 像素
+DEFAULT_WINDOW_HEIGHT = 1000           # 像素
+MIN_WINDOW_WIDTH = 800                 # 像素
+MIN_WINDOW_HEIGHT = 600                # 像素
+
+# 主题设置
+DEFAULT_THEME = "default"
+AVAILABLE_THEMES = ["default", "dark", "light", "blue", "green"]
+
+# 语言设置
+DEFAULT_LANGUAGE = "zh_CN"
+AVAILABLE_LANGUAGES = {
+    "zh_CN": "简体中文",
+    "zh_TW": "繁体中文", 
+    "en_US": "English (US)",
+    "en_GB": "English (UK)"
+}
+
+# 项目类型默认字数
+PROJECT_TYPE_WORD_COUNTS = {
+    "novel": 80000,        # 长篇小说
+    "short_story": 5000,   # 短篇小说
+    "novella": 40000,      # 中篇小说
+    "script": 20000,       # 剧本
+    "poetry": 2000,        # 诗歌
+    "essay": 10000,        # 散文
+    "other": 50000         # 其他
+}
+
+# 文档类型
+DOCUMENT_TYPES = {
+    "chapter": "章节",
+    "scene": "场景",
+    "character": "角色",
+    "outline": "大纲",
+    "note": "笔记",
+    "research": "资料",
+    "other": "其他"
+}
+
+# 导出模板
+EXPORT_TEMPLATES = {
+    "simple": "简单模板",
+    "professional": "专业模板",
+    "academic": "学术模板",
+    "creative": "创意模板"
+}
+
+# AI任务类型
+AI_TASK_TYPES = {
+    "continuation": "续写",
+    "rewrite": "改写",
+    "summarize": "总结",
+    "analyze": "分析",
+    "translate": "翻译",
+    "proofread": "校对",
+    "expand": "扩展",
+    "compress": "压缩"
+}
+
+# 错误代码
+ERROR_CODES = {
+    "FILE_NOT_FOUND": 1001,
+    "PERMISSION_DENIED": 1002,
+    "INVALID_FORMAT": 1003,
+    "CORRUPTED_FILE": 1004,
+    "NETWORK_ERROR": 2001,
+    "AI_SERVICE_ERROR": 2002,
+    "VALIDATION_ERROR": 3001,
+    "BUSINESS_LOGIC_ERROR": 3002,
+    "UNKNOWN_ERROR": 9999
+}
+
+# 状态码
+STATUS_CODES = {
+    "SUCCESS": 200,
+    "CREATED": 201,
+    "ACCEPTED": 202,
+    "BAD_REQUEST": 400,
+    "UNAUTHORIZED": 401,
+    "FORBIDDEN": 403,
+    "NOT_FOUND": 404,
+    "INTERNAL_ERROR": 500,
+    "SERVICE_UNAVAILABLE": 503
+}
+
+# 正则表达式模式
+REGEX_PATTERNS = {
+    "email": r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$',
+    "url": r'^https?://[^\s/$.?#].[^\s]*$',
+    "chinese_char": r'[\u4e00-\u9fff]',
+    "english_word": r'[a-zA-Z]+',
+    "number": r'\d+',
+    "version": r'^\d+\.\d+\.\d+$'
+}
+
+# 时间格式
+TIME_FORMATS = {
+    "datetime": "%Y-%m-%d %H:%M:%S",
+    "date": "%Y-%m-%d",
+    "time": "%H:%M:%S",
+    "timestamp": "%Y%m%d_%H%M%S",
+    "iso": "%Y-%m-%dT%H:%M:%S"
+}
+
+# 编码格式
+ENCODING_FORMATS = {
+    "utf8": "UTF-8",
+    "gbk": "GBK",
+    "gb2312": "GB2312",
+    "ascii": "ASCII",
+    "latin1": "Latin-1"
+}
+
+# 快捷键
+SHORTCUTS = {
+    "new_project": "Ctrl+N",
+    "open_project": "Ctrl+O", 
+    "save": "Ctrl+S",
+    "save_as": "Ctrl+Shift+S",
+    "quit": "Ctrl+Q",
+    "undo": "Ctrl+Z",
+    "redo": "Ctrl+Y",
+    "cut": "Ctrl+X",
+    "copy": "Ctrl+C",
+    "paste": "Ctrl+V",
+    "find": "Ctrl+F",
+    "replace": "Ctrl+H",
+    "ai_continue": "Ctrl+Shift+C",
+    "ai_analyze": "Ctrl+Shift+A",
+    "fullscreen": "F11",
+    "help": "F1"
+}
+
+# 配置文件路径
+CONFIG_DIR = Path.home() / ".ainovel"
+CONFIG_FILE = CONFIG_DIR / "config.json"
+LOG_DIR = CONFIG_DIR / "logs"
+BACKUP_DIR = CONFIG_DIR / "backups"
+CACHE_DIR = CONFIG_DIR / "cache"
+PLUGINS_DIR = CONFIG_DIR / "plugins"
+
+# 网络设置
+DEFAULT_TIMEOUT = 30                   # 秒
+MAX_RETRIES = 3                        # 次
+RETRY_DELAY = 1                        # 秒
+
+# 性能设置
+MAX_UNDO_STEPS = 100                   # 撤销步数
+MAX_SEARCH_RESULTS = 1000              # 搜索结果数
+MAX_RECENT_FILES = 20                  # 最近文件数
+CACHE_EXPIRE_HOURS = 24                # 缓存过期时间
+
+# 安全设置
+MAX_LOGIN_ATTEMPTS = 5                 # 最大登录尝试次数
+SESSION_TIMEOUT = 3600                 # 会话超时时间（秒）
+PASSWORD_MIN_LENGTH = 8                # 密码最小长度
+
+# 调试设置
+DEBUG_MODE = False
+VERBOSE_LOGGING = False
+ENABLE_PROFILING = False
+
+# 功能开关
+FEATURES = {
+    "ai_assistant": True,
+    "cloud_sync": False,
+    "collaboration": False,
+    "version_control": False,
+    "plugin_system": False,
+    "advanced_analytics": False
+}
+
+# 统计信息
+STATISTICS_RETENTION_DAYS = 365        # 统计数据保留天数
+ANALYTICS_BATCH_SIZE = 100             # 分析批处理大小
+
+# 更新设置
+CHECK_UPDATES_INTERVAL = 86400         # 检查更新间隔（秒）
+AUTO_UPDATE_ENABLED = False            # 自动更新开关
+
+# 帮助和文档
+HELP_URL = "https://help.ainovel.com"
+DOCUMENTATION_URL = "https://docs.ainovel.com"
+SUPPORT_EMAIL = "support@ainovel.com"
+FEEDBACK_URL = "https://feedback.ainovel.com"
+
+# 社交媒体
+WEBSITE_URL = "https://www.ainovel.com"
+GITHUB_URL = "https://github.com/ainovel/editor"
+TWITTER_URL = "https://twitter.com/ainovel"
+
+# 许可证信息
+LICENSE_TYPE = "MIT"
+LICENSE_URL = "https://opensource.org/licenses/MIT"

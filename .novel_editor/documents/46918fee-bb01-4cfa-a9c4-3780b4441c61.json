@@ -1,0 +1,26 @@
+{
+  "id": "46918fee-bb01-4cfa-a9c4-3780b4441c61",
+  "type": "chapter",
+  "project_id": "8afffb5d-2f4c-400e-ae05-98ccdb4e1c3c",
+  "metadata": {
+    "title": "新章节",
+    "description": "",
+    "tags": [],
+    "author": "",
+    "created_at": "2025-08-04T13:23:59.477383",
+    "updated_at": "2025-08-04T13:23:59.477383"
+  },
+  "statistics": {
+    "word_count": 3,
+    "character_count": 19,
+    "paragraph_count": 2,
+    "sentence_count": 1,
+    "reading_time_minutes": 0.012
+  },
+  "status": "draft",
+  "type_specific_data": {
+    "chapter_number": null,
+    "scene_count": 1,
+    "pov_character": ""
+  }
+}
