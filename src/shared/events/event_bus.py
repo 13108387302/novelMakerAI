@@ -172,7 +172,15 @@ class EventBus:
             # 添加到订阅列表
             if event_type not in self._subscriptions:
                 self._subscriptions[event_type] = []
-            
+
+            # 检查是否已经存在相同的订阅（避免重复订阅）
+            existing_subscriptions = self._subscriptions[event_type]
+            for existing in existing_subscriptions:
+                if (existing.handler == handler and
+                    existing.subscriber_ref == subscriber_ref):
+                    logger.debug(f"跳过重复订阅: {event_type.__name__}")
+                    return existing.subscription_id
+
             self._subscriptions[event_type].append(subscription)
             
             # 按优先级排序
@@ -350,12 +358,29 @@ class EventBus:
                 self._subscriptions.pop(event_type, None)
     
     def shutdown(self) -> None:
-        """关闭事件总线"""
+        """关闭事件总线（同步版本）"""
         self._is_running = False
-        
+
         if self._processing_task is not None:
             self._processing_task.cancel()
-        
+
+        self.clear_subscriptions()
+        logger.info("事件总线已关闭")
+
+    async def shutdown_async(self) -> None:
+        """关闭事件总线（异步版本）"""
+        self._is_running = False
+
+        if self._processing_task is not None and not self._processing_task.done():
+            logger.info("取消事件处理任务...")
+            self._processing_task.cancel()
+            try:
+                await self._processing_task
+            except asyncio.CancelledError:
+                logger.info("事件处理任务已取消")
+            except Exception as e:
+                logger.warning(f"取消事件处理任务时出错: {e}")
+
         self.clear_subscriptions()
         logger.info("事件总线已关闭")
 

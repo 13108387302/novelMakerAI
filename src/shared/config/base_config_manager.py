@@ -15,8 +15,14 @@ from datetime import datetime
 from abc import ABC, abstractmethod
 
 from src.shared.utils.logger import get_logger
+from src.shared.constants import CONFIG_DIR
 
 logger = get_logger(__name__)
+
+# 配置管理器常量
+DEFAULT_BACKUP_COUNT = 5
+TEMP_FILE_SUFFIX = '.tmp'
+BACKUP_DIR_NAME = 'backups'
 
 
 class BaseConfigManager(ABC):
@@ -46,7 +52,7 @@ class BaseConfigManager(ABC):
         self.config_file = self.config_dir / self.get_config_file_name()
         
         # 备份目录
-        self.backup_dir = self.config_dir / "backups"
+        self.backup_dir = self.config_dir / BACKUP_DIR_NAME
         self.backup_dir.mkdir(parents=True, exist_ok=True)
         
         # 配置数据
@@ -67,7 +73,7 @@ class BaseConfigManager(ABC):
     
     def _get_default_config_dir(self) -> Path:
         """获取默认配置目录"""
-        return Path.home() / ".ai_novel_editor"
+        return CONFIG_DIR
     
     def _ensure_config_dir(self) -> None:
         """确保配置目录存在"""
@@ -151,7 +157,7 @@ class BaseConfigManager(ABC):
             self._validate_config_for_json()
             
             # 先写入临时文件，然后重命名，确保原子性操作
-            temp_file = self.config_file.with_suffix('.tmp')
+            temp_file = self.config_file.with_suffix(TEMP_FILE_SUFFIX)
             with open(temp_file, 'w', encoding='utf-8') as f:
                 json.dump(self.config_data, f, indent=2, ensure_ascii=False)
             
@@ -200,8 +206,8 @@ class BaseConfigManager(ABC):
                 backup_file = self.backup_dir / f"{self.get_config_file_name()}.{datetime.now().strftime('%Y%m%d_%H%M%S')}.bak"
                 shutil.copy2(self.config_file, backup_file)
                 
-                # 清理旧备份（保留最近5个）
-                self._cleanup_old_backups(5)
+                # 清理旧备份（保留最近几个）
+                self._cleanup_old_backups(DEFAULT_BACKUP_COUNT)
                 
         except Exception as e:
             logger.warning(f"创建配置备份失败: {e}")

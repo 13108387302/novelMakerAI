@@ -39,20 +39,23 @@ try:
     from src.application.services.ai.core.ai_orchestration_service import AIOrchestrationService
     from src.application.services.ai.intelligence.ai_intelligence_service import AIIntelligenceService
     _new_ai_available = True
-except ImportError:
-    # 回退到兼容性AI服务
-    try:
-        from src.application.services.ai import get_ai_service
-        AIService = get_ai_service
-        _new_ai_available = False
-    except ImportError:
-        # 如果连兼容性服务都不可用，创建一个占位符
-        class AIService:
-            def __init__(self, *args, **kwargs):
-                # 忽略参数，直接抛出异常
-                del args, kwargs  # 避免未使用参数警告
-                raise RuntimeError("AI服务不可用，请检查AI模块安装")
-        _new_ai_available = False
+    print("✅ 新架构AI服务导入成功")
+except ImportError as e:
+    print(f"⚠️ 新架构AI服务导入失败: {e}")
+    import traceback
+    print(f"详细错误: {traceback.format_exc()}")
+
+    # 创建一个占位符AI服务类
+    class AIService:
+        def __init__(self, *args, **kwargs):
+            # 忽略参数，创建一个基本的占位符服务
+            del args, kwargs  # 避免未使用参数警告
+
+        def process_request(self, *args, **kwargs):
+            del args, kwargs  # 避免未使用参数警告
+            raise RuntimeError("AI服务不可用，请检查AI模块安装")
+
+    _new_ai_available = False
 from src.application.services.settings_service import SettingsService
 from src.application.services.search import SearchService
 from src.application.services.import_export_service import ImportExportService
@@ -151,6 +154,9 @@ class AINovelEditorApp:
 
         # 服务引用
         self.app_service: Optional[ApplicationService] = None
+
+        # AI服务初始化标志
+        self._ai_services_need_initialization: bool = False
 
         logger.info("AI小说编辑器应用程序初始化")
 
@@ -471,12 +477,9 @@ class AINovelEditorApp:
             # 标记需要初始化AI服务
             self._ai_services_need_initialization = True
         else:
-            # 使用旧版本AI服务
+            # 使用占位符AI服务
             def create_ai_service():
-                return AIService(
-                    ai_repository=self.container.get(IAIServiceRepository),
-                    event_bus=self.event_bus
-                )
+                return AIService()
             self.container.register_singleton(AIService, create_ai_service)
         self.container.register_singleton(
             SettingsService,
@@ -552,11 +555,6 @@ class AINovelEditorApp:
         """初始化服务"""
         # 获取应用服务
         self.app_service = self.container.get(ApplicationService)
-
-        # 设置全局设置服务（供AI客户端使用）
-        settings_service = self.container.get(SettingsService)
-        from src.infrastructure.ai_clients.openai_client import set_global_settings_service
-        set_global_settings_service(settings_service)
 
         # 初始化应用服务
         if not self.app_service.initialize():
@@ -1012,14 +1010,52 @@ class AINovelEditorApp:
                 except Exception as e:
                     logger.error(f"关闭插件管理器失败: {e}")
 
-            # 3. 关闭应用服务
+            # 3. 关闭AI编排服务
+            if hasattr(self, 'ai_service') and self.ai_service:
+                try:
+                    # 获取AI编排服务
+                    ai_orchestration = getattr(self.ai_service, 'ai_orchestration_service', None)
+                    if ai_orchestration:
+                        logger.info("关闭AI编排服务...")
+                        # 创建临时事件循环来关闭AI服务
+                        try:
+                            loop = asyncio.get_event_loop()
+                            if loop.is_closed():
+                                loop = asyncio.new_event_loop()
+                                asyncio.set_event_loop(loop)
+                            loop.run_until_complete(ai_orchestration.shutdown())
+                        except Exception as e:
+                            logger.error(f"关闭AI编排服务失败: {e}")
+                except Exception as e:
+                    logger.error(f"关闭AI服务失败: {e}")
+
+            # 4. 关闭事件总线
+            try:
+                from src.shared.events.event_bus import get_event_bus
+                event_bus = get_event_bus()
+                if event_bus:
+                    logger.info("关闭事件总线...")
+                    # 使用异步关闭方法
+                    try:
+                        loop = asyncio.get_event_loop()
+                        if loop.is_closed():
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                        loop.run_until_complete(event_bus.shutdown_async())
+                    except Exception as e:
+                        logger.warning(f"异步关闭事件总线失败，使用同步方法: {e}")
+                        event_bus.shutdown()
+            except Exception as e:
+                logger.error(f"关闭事件总线失败: {e}")
+
+            # 5. 关闭应用服务
             if self.app_service:
                 try:
                     self.app_service.shutdown()
                 except Exception as e:
                     logger.error(f"关闭应用服务失败: {e}")
 
-            # 4. 最后关闭事件循环（确保其他组件已经停止使用）
+            # 6. 最后关闭事件循环（确保其他组件已经停止使用）
             try:
                 loop = asyncio.get_event_loop()
                 if loop and not loop.is_closed():

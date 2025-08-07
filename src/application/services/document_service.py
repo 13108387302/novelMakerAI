@@ -17,11 +17,15 @@ from src.domain.events.document_events import (
 )
 from src.shared.events.event_bus import EventBus
 from src.shared.utils.logger import get_logger
+from src.shared.constants import DEFAULT_RECENT_DOCUMENTS_LIMIT
 
 if TYPE_CHECKING:
     from src.application.services.search.search_service_refactored import SearchService
 
 logger = get_logger(__name__)
+
+# 文档服务常量
+COPY_DESCRIPTION_PREFIX = "复制自: "
 
 
 class DocumentService:
@@ -97,6 +101,8 @@ class DocumentService:
             Exception: 文档创建或保存失败时抛出
         """
         try:
+            logger.info(f"📝 开始创建文档: {title} (类型: {document_type.value}, 项目: {project_id})")
+
             # 使用工厂函数创建文档
             document = create_document(
                 document_type=document_type,
@@ -104,10 +110,14 @@ class DocumentService:
                 content=content,
                 project_id=project_id
             )
-            
+
+            logger.info(f"📄 文档实体已创建: {document.title} (ID: {document.id})")
+
             # 保存文档
             success = await self.document_repository.save(document)
             if success:
+                logger.info(f"💾 文档保存成功: {document.title} (ID: {document.id})")
+
                 # 发布文档创建事件
                 event = DocumentCreatedEvent(
                     document_id=document.id,
@@ -116,18 +126,22 @@ class DocumentService:
                     project_id=project_id
                 )
                 try:
+                    logger.info(f"📢 发布文档创建事件: {document.title} (ID: {document.id})")
                     await self.event_bus.publish_async(event)
+                    logger.info(f"✅ 文档创建事件发布成功: {document.title}")
                 except Exception as e:
                     logger.warning(f"发布文档创建事件失败: {e}")
-                
-                logger.info(f"文档创建成功: {title} ({document.id})")
+
+                logger.info(f"🎉 文档创建完成: {title} ({document.id})")
                 return document
             else:
-                logger.error(f"文档保存失败: {title}")
+                logger.error(f"❌ 文档保存失败: {title}")
                 return None
                 
         except Exception as e:
             logger.error(f"创建文档失败: {e}")
+            import traceback
+            logger.error(f"详细错误: {traceback.format_exc()}")
             return None
     
     async def open_document(self, document_id: str) -> Optional[Document]:
@@ -467,7 +481,7 @@ class DocumentService:
     
     async def get_recent_documents(
         self, 
-        limit: int = 10, 
+        limit: int = DEFAULT_RECENT_DOCUMENTS_LIMIT,
         project_id: Optional[str] = None
     ) -> List[Document]:
         """获取最近编辑的文档"""
@@ -497,7 +511,7 @@ class DocumentService:
             )
             
             # 复制元数据
-            duplicate.metadata.description = f"复制自: {original.title}"
+            duplicate.metadata.description = f"{COPY_DESCRIPTION_PREFIX}{original.title}"
             duplicate.metadata.tags = original.metadata.tags.copy()
             
             # 保存副本
@@ -539,3 +553,7 @@ class DocumentService:
     def has_open_documents(self) -> bool:
         """是否有打开的文档"""
         return len(self._open_documents) > 0
+
+
+
+

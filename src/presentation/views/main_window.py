@@ -30,8 +30,47 @@ from src.presentation.shortcuts.shortcut_manager import ShortcutManager
 from .ui_builders import MenuBuilder, ToolBarBuilder, StatusBarBuilder, DockBuilder
 
 from src.shared.utils.logger import get_logger
+from src.shared.constants import (
+    DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT,
+    DEFAULT_STATUS_TIMEOUT, UI_UPDATE_DELAY_MS, DOCUMENT_LOAD_DELAY_MS
+)
 
 logger = get_logger(__name__)
+
+# 主窗口常量
+WINDOW_TITLE = "AI小说编辑器 2.0"
+DEFAULT_THEME = "light"
+EDITOR_PLACEHOLDER = "编辑器暂不可用"
+AI_PANEL_HINT = "📝 文档AI助手"
+AI_PANEL_INFO = "请先打开一个文档\n文档AI助手将为您提供：\n\n🧠 智能续写建议\n💡 写作指导\n🎨 内容优化\n📊 文档分析"
+AI_PANEL_UNAVAILABLE = "AI面板创建失败"
+DOCUMENT_AI_UNAVAILABLE = "文档AI面板不可用"
+
+# 样式常量
+HINT_LABEL_STYLE = "color: #2196F3; padding: 10px;"
+INFO_LABEL_STYLE = """
+    QLabel {
+        color: #666;
+        font-size: 14px;
+        line-height: 1.5;
+        padding: 20px;
+        background-color: #f8f9fa;
+        border: 1px solid #e9ecef;
+        border-radius: 8px;
+        margin: 10px;
+    }
+"""
+
+# 快捷键映射
+SHORTCUT_MAPPINGS = {
+    "Ctrl+N": "new_project",
+    "Ctrl+O": "open_project",
+    "Ctrl+S": "save",
+    "Ctrl+Q": "exit",
+    "F1": "show_shortcuts",
+    "F11": "toggle_fullscreen",
+    "F4": "show_ai_panel",
+}
 
 
 class MainWindow(QMainWindow):
@@ -103,9 +142,9 @@ class MainWindow(QMainWindow):
         
     def _setup_ui(self):
         """设置UI"""
-        self.setWindowTitle("AI小说编辑器 2.0")
-        self.setMinimumSize(1200, 800)
-        self.resize(1600, 1000)
+        self.setWindowTitle(WINDOW_TITLE)
+        self.setMinimumSize(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
+        self.resize(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
         
         # 创建UI组件
         self._create_widgets()
@@ -131,7 +170,7 @@ class MainWindow(QMainWindow):
         else:
             from PyQt6.QtWidgets import QTextEdit
             self.editor_widget = QTextEdit()
-            self.editor_widget.setPlaceholderText("编辑器暂不可用")
+            self.editor_widget.setPlaceholderText(EDITOR_PLACEHOLDER)
         
         # 全局AI面板（使用重构版本）
         try:
@@ -168,12 +207,12 @@ class MainWindow(QMainWindow):
                         raise Exception("旧版AI组件不可用")
                 except Exception as e2:
                     logger.error(f"旧版AI面板创建失败: {e2}")
-                    self.global_ai_panel = QLabel(f"AI面板创建失败: {str(e)}")
+                    self.global_ai_panel = QLabel(f"{AI_PANEL_UNAVAILABLE}: {str(e)}")
                     logger.error("❌ AI面板创建失败")
         except Exception as e:
             logger.error(f"创建全局AI面板失败: {e}")
             # 最终回退
-            self.global_ai_panel = QLabel(f"AI面板创建失败: {str(e)}")
+            self.global_ai_panel = QLabel(f"{AI_PANEL_UNAVAILABLE}: {str(e)}")
         
         # 状态服务和状态面板
         self.status_service = StatusService()
@@ -195,27 +234,16 @@ class MainWindow(QMainWindow):
         default_layout = QVBoxLayout(default_widget)
 
         # 提示标签
-        hint_label = QLabel("📝 文档AI助手")
+        hint_label = QLabel(AI_PANEL_HINT)
         hint_label.setFont(QFont("Microsoft YaHei UI", 12, QFont.Weight.Bold))
         hint_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        hint_label.setStyleSheet("color: #2196F3; padding: 10px;")
+        hint_label.setStyleSheet(HINT_LABEL_STYLE)
         default_layout.addWidget(hint_label)
 
         # 说明文本
-        info_label = QLabel("请先打开一个文档\n文档AI助手将为您提供：\n\n🧠 智能续写建议\n💡 写作指导\n🎨 内容优化\n📊 文档分析")
+        info_label = QLabel(AI_PANEL_INFO)
         info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        info_label.setStyleSheet("""
-            QLabel {
-                color: #666;
-                font-size: 14px;
-                line-height: 1.5;
-                padding: 20px;
-                background-color: #f8f9fa;
-                border: 1px solid #e9ecef;
-                border-radius: 8px;
-                margin: 10px;
-            }
-        """)
+        info_label.setStyleSheet(INFO_LABEL_STYLE)
         default_layout.addWidget(info_label)
 
         default_layout.addStretch()
@@ -289,7 +317,7 @@ class MainWindow(QMainWindow):
         try:
             from src.presentation.styles.theme_manager import ThemeManager
             theme_manager = ThemeManager()
-            theme_manager.apply_theme("light")
+            theme_manager.apply_theme(DEFAULT_THEME)
         except Exception as e:
             logger.warning(f"应用主题失败: {e}")
             
@@ -357,13 +385,8 @@ class MainWindow(QMainWindow):
         try:
             # 基本快捷键
             shortcuts = {
-                "Ctrl+N": lambda: self._handle_menu_action("new_project", None),
-                "Ctrl+O": lambda: self._handle_menu_action("open_project", None),
-                "Ctrl+S": lambda: self._handle_menu_action("save", None),
-                "Ctrl+Q": lambda: self._handle_menu_action("exit", None),
-                "F1": lambda: self._handle_menu_action("show_shortcuts", None),
-                "F11": lambda: self._handle_menu_action("toggle_fullscreen", None),
-                "F4": lambda: self._handle_menu_action("show_ai_panel", None),
+                sequence: lambda action=action: self._handle_menu_action(action, None)
+                for sequence, action in SHORTCUT_MAPPINGS.items()
             }
             
             # 导入快捷键类别
@@ -421,12 +444,17 @@ class MainWindow(QMainWindow):
     def _handle_menu_action(self, action_name: str, action):
         """处理菜单动作"""
         try:
+            logger.debug(f"🎯 处理菜单动作: {action_name}")
+
             # 文件菜单
             if action_name == "new_project":
                 self.controller.new_project()
             elif action_name == "open_project":
                 self.controller.open_project()
+            elif action_name == "close_project":
+                self.controller.close_current_project()
             elif action_name == "save":
+                logger.info("💾 Ctrl+S 快捷键触发保存动作")
                 self.controller.save_current_document()
             elif action_name == "save_as":
                 self.controller.save_as()
@@ -478,6 +506,9 @@ class MainWindow(QMainWindow):
                 self.controller.backup_management()
             elif action_name == "settings":
                 self.controller.settings()
+            elif action_name == "new_document":
+                logger.info("🔧 触发新建文档动作")
+                self.controller.new_document()
 
             # 帮助菜单
             elif action_name == "show_shortcuts":
@@ -577,7 +608,7 @@ class MainWindow(QMainWindow):
                         logger.error(f"❌ 更新AI面板失败: {e}")
 
                 # 延迟更新AI面板
-                QTimer.singleShot(200, update_ai_panel)
+                QTimer.singleShot(UI_UPDATE_DELAY_MS, update_ai_panel)
 
             ui_time = time.time() - start_time
             logger.info(f"⚡ 项目打开事件处理完成，UI响应时间: {ui_time:.3f}s")
@@ -739,7 +770,7 @@ class MainWindow(QMainWindow):
                             self.statusbar_builder.show_message(f"文档加载失败: {document.title}")
 
                     # 使用QTimer延迟执行，让UI先更新
-                    QTimer.singleShot(50, actual_load)  # 50ms延迟
+                    QTimer.singleShot(DOCUMENT_LOAD_DELAY_MS, actual_load)
 
                 except Exception as e:
                     logger.error(f"❌ 分块加载失败: {e}")
@@ -779,11 +810,14 @@ class MainWindow(QMainWindow):
                             new_ai_panel = create_document_ai_panel(unified_ai_service, document.id, document_type)
                         else:
                             # 创建简单的占位符
-                            new_ai_panel = QLabel("文档AI面板不可用")
+                            new_ai_panel = QLabel(DOCUMENT_AI_UNAVAILABLE)
 
                         # 设置文档上下文
-                        if hasattr(document, 'content'):
-                            new_ai_panel.set_document_context(document.content)
+                        if hasattr(document, 'content') and hasattr(new_ai_panel, 'set_document_context'):
+                            try:
+                                new_ai_panel.set_document_context(document.content)
+                            except Exception as e:
+                                logger.debug(f"设置文档上下文失败: {e}")
 
                         logger.info(f"✅ 完整功能文档AI面板创建成功: {document.id}")
 
@@ -936,9 +970,7 @@ class MainWindow(QMainWindow):
                 # 从主配置同步到设置服务
                 settings_service.sync_from_main_config()
 
-                # 重新设置全局设置服务
-                from src.infrastructure.ai_clients.openai_client import set_global_settings_service
-                set_global_settings_service(settings_service)
+                # AI客户端设置已更新
 
             # 通知AI服务重新加载设置
             if hasattr(self.controller, 'ai_service'):
@@ -953,18 +985,43 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         """关闭事件"""
         try:
+            # 保存当前项目信息（如果有打开的项目）
+            self._save_current_project_info()
+
             # 发出关闭信号
             self.window_closing.emit()
-            
+
             # 保存窗口状态
             self._save_window_state()
-            
+
             # 接受关闭事件
             event.accept()
-            
+
         except Exception as e:
             logger.error(f"关闭窗口失败: {e}")
             event.accept()
+
+    def _save_current_project_info(self):
+        """保存当前项目信息"""
+        try:
+            if self.controller and hasattr(self.controller, 'project_service'):
+                current_project = self.controller.project_service.get_current_project()
+                if current_project:
+                    # 获取项目路径
+                    project_path = self.controller.project_service.get_current_project_path()
+                    if project_path:
+                        # 保存项目信息，下次启动时自动打开
+                        self.controller.settings_service.set_last_project_info(
+                            current_project.id,
+                            str(project_path)
+                        )
+                        logger.info(f"已保存当前项目信息: {current_project.title}")
+                    else:
+                        logger.debug(f"项目 '{current_project.title}' 没有设置根路径，跳过路径保存")
+                else:
+                    logger.info("没有打开的项目需要保存")
+        except Exception as e:
+            logger.error(f"保存当前项目信息失败: {e}")
             
     def _save_window_state(self):
         """保存窗口状态"""
@@ -981,7 +1038,7 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.error(f"保存窗口状态失败: {e}")
             
-    def show_message(self, message: str, timeout: int = 3000):
+    def show_message(self, message: str, timeout: int = DEFAULT_STATUS_TIMEOUT):
         """显示状态消息"""
         self.statusbar_builder.show_message(message, timeout)
 
@@ -1010,7 +1067,11 @@ class MainWindow(QMainWindow):
             # 更新当前文档AI面板的上下文
             current_tab = self.editor_widget.get_current_tab()
             if current_tab and hasattr(current_tab, 'ai_panel') and current_tab.ai_panel:
-                current_tab.ai_panel.set_document_context(content, doc_type, metadata)
+                try:
+                    if hasattr(current_tab.ai_panel, 'set_document_context'):
+                        current_tab.ai_panel.set_document_context(content, doc_type, metadata)
+                except Exception as e:
+                    logger.debug(f"更新文档AI面板上下文失败: {e}")
 
         except Exception as e:
             logger.error(f"处理文档内容变化失败: {e}")

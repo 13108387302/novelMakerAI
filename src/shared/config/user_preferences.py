@@ -13,8 +13,15 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 from src.shared.utils.logger import get_logger
 from .base_config_manager import BaseConfigManager
+from src.shared.constants import (
+    DEFAULT_FONT_SIZE, DEFAULT_AUTO_SAVE_INTERVAL, DEFAULT_TAB_WIDTH,
+    DEFAULT_AI_CREATIVITY_LEVEL, DEFAULT_AI_SUGGESTION_DELAY, DEFAULT_THEME
+)
 
 logger = get_logger(__name__)
+
+# 用户偏好设置常量
+USER_PREFERENCES_FILE = "user_preferences.json"
 
 
 class UserPreferences(BaseConfigManager):
@@ -32,30 +39,30 @@ class UserPreferences(BaseConfigManager):
 
     def get_config_file_name(self) -> str:
         """获取配置文件名"""
-        return "user_preferences.json"
+        return USER_PREFERENCES_FILE
 
     def get_default_config(self) -> Dict[str, Any]:
         """获取默认配置"""
         return {
             "ui": {
                 "show_welcome_dialog": True,  # 是否显示欢迎对话框
-                "theme": "light",             # 主题
-                "font_size": 12,              # 字体大小
-                "auto_save_interval": 300,    # 自动保存间隔（秒）
+                "theme": DEFAULT_THEME,       # 主题
+                "font_size": DEFAULT_FONT_SIZE, # 字体大小
+                "auto_save_interval": DEFAULT_AUTO_SAVE_INTERVAL, # 自动保存间隔（秒）
                 "show_line_numbers": True,    # 显示行号
                 "word_wrap": True,            # 自动换行
             },
             "editor": {
-                "tab_size": 4,                # Tab大小
+                "tab_size": DEFAULT_TAB_WIDTH, # Tab大小
                 "insert_spaces": True,        # 使用空格代替Tab
                 "highlight_current_line": True, # 高亮当前行
                 "show_whitespace": False,     # 显示空白字符
             },
             "ai": {
                 "auto_suggestions": True,     # 自动建议
-                "suggestion_delay": 1000,     # 建议延迟（毫秒）
+                "suggestion_delay": DEFAULT_AI_SUGGESTION_DELAY, # 建议延迟（毫秒）
                 "max_tokens": 1000,           # 最大token数
-                "temperature": 0.7,           # 温度参数
+                "temperature": DEFAULT_AI_CREATIVITY_LEVEL, # 温度参数
             },
             "notifications": {
                 "show_save_notifications": True,    # 显示保存通知
@@ -118,7 +125,6 @@ class UserPreferences(BaseConfigManager):
     def import_preferences(self, file_path: str) -> bool:
         """从文件导入偏好设置（向后兼容）"""
         return self.import_config(Path(file_path))
-
 
 
 # 全局实例

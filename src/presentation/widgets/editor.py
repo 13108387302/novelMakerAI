@@ -6,6 +6,7 @@
 富文本编辑器，支持多种编辑功能
 """
 
+import time
 from typing import Optional
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTextEdit, QTabWidget,
@@ -16,7 +17,11 @@ from PyQt6.QtGui import QFont, QTextCursor, QAction
 
 from src.domain.entities.document import Document, DocumentType
 from src.presentation.widgets.syntax_highlighter import NovelSyntaxHighlighter, MarkdownSyntaxHighlighter
+from src.presentation.widgets.virtual_text_editor import VirtualTextEditor, get_virtual_editor_manager
+from src.application.services.document_preloader import get_document_preloader
+from src.shared.monitoring.performance_monitor import get_performance_monitor, monitor_performance
 from src.shared.utils.logger import get_logger
+from src.shared.utils.thread_safety import ensure_main_thread
 
 logger = get_logger(__name__)
 
@@ -67,6 +72,11 @@ class DocumentTab(QWidget):
         self.ai_assistant = ai_assistant
         self.ai_panel = None
         self.syntax_highlighter = None
+
+        # 虚拟化编辑器支持
+        self.use_virtual_editor = self._should_use_virtual_editor()
+        self.virtual_editor = None
+
         self._setup_ui()
         self._setup_connections()
         self._setup_syntax_highlighting()
@@ -80,28 +90,125 @@ class DocumentTab(QWidget):
         self.auto_save_timer.timeout.connect(self._auto_save)
         self.auto_save_timer.setSingleShot(True)
 
-        logger.debug(f"文档标签页创建: {document.title}")
+        logger.debug(f"文档标签页创建: {document.title} (虚拟化: {self.use_virtual_editor})")
+
+    def _should_use_virtual_editor(self) -> bool:
+        """判断是否应该使用虚拟化编辑器"""
+        try:
+            # 基于文档大小决定
+            content_length = len(self.document.content) if self.document.content else 0
+            line_count = self.document.content.count('\n') + 1 if self.document.content else 1
+
+            # 超过50K字符或2000行使用虚拟化编辑器
+            should_use_virtual = content_length > 50000 or line_count > 2000
+
+            logger.debug(f"文档大小评估: {content_length} 字符, {line_count} 行, 使用虚拟化: {should_use_virtual}")
+            return should_use_virtual
+
+        except Exception as e:
+            logger.error(f"判断虚拟化编辑器使用失败: {e}")
+            return False
 
     def _load_content_async(self):
-        """异步加载文档内容"""
+        """异步加载文档内容（优化版本）"""
         try:
             from PyQt6.QtCore import QTimer
             import time
 
+            # 开始性能监控
+            monitor = get_performance_monitor()
+            operation_id = monitor.start_operation(
+                f"document_load_{self.document.id}",
+                "document_load",
+                {
+                    'document_id': self.document.id,
+                    'document_title': self.document.title,
+                    'use_virtual_editor': self.use_virtual_editor
+                }
+            )
+
             start_time = time.time()
-            content_length = len(self.document.content)
+            content_length = len(self.document.content) if self.document.content else 0
+            line_count = self.document.content.count('\n') + 1 if self.document.content else 1
 
-            logger.info(f"📝 开始异步加载文档内容: {self.document.title} ({content_length} 字符)")
+            logger.info(f"📝 开始优化异步加载: {self.document.title} ({content_length} 字符, {line_count} 行)")
 
-            # 如果内容很小，直接同步加载
-            if content_length < 10000:  # 小于10K字符
-                self.text_edit.setPlainText(self.document.content)
-                self._update_word_count()
-                load_time = time.time() - start_time
-                logger.info(f"⚡ 小文档同步加载完成: {load_time:.3f}s")
-                return
+            # 决定加载策略
+            if self.use_virtual_editor:
+                # 使用虚拟化编辑器加载大文档
+                self._load_with_virtual_editor(operation_id)
+            elif content_length < 10000:  # 小文档直接同步加载
+                self._load_small_document_direct(start_time, operation_id)
+            else:  # 中等文档使用优化的分块加载
+                self._load_medium_document_chunked(start_time, operation_id)
 
-            # 大文档分块加载
+        except Exception as e:
+            logger.error(f"❌ 异步内容加载失败: {e}")
+            # 结束性能监控（失败）
+            monitor.end_operation(operation_id, "document_load", False, {'error': str(e)})
+            # 回退到同步加载
+            self._fallback_sync_load()
+
+    def _load_with_virtual_editor(self, operation_id: str):
+        """使用虚拟化编辑器加载"""
+        try:
+            logger.info(f"🚀 使用虚拟化编辑器加载大文档: {self.document.title}")
+
+            # 创建虚拟化编辑器
+            manager = get_virtual_editor_manager()
+            self.virtual_editor = manager.create_editor(self.document.id, self)
+
+            # 连接虚拟化编辑器信号
+            self.virtual_editor.loading_completed.connect(
+                lambda load_time: self._on_virtual_load_completed(load_time, operation_id)
+            )
+            self.virtual_editor.viewport_changed.connect(self._on_viewport_changed)
+
+            # 替换原有的text_edit
+            self._replace_text_editor_with_virtual()
+
+            # 开始虚拟化加载
+            self.virtual_editor.load_document_virtual(self.document)
+
+            # 触发预加载相邻文档
+            self._trigger_adjacent_preload()
+
+        except Exception as e:
+            logger.error(f"虚拟化编辑器加载失败: {e}")
+            # 结束性能监控（失败）
+            monitor = get_performance_monitor()
+            monitor.end_operation(operation_id, "document_load", False, {'error': str(e)})
+            # 回退到普通加载
+            self._fallback_sync_load()
+
+    def _load_small_document_direct(self, start_time: float, operation_id: str):
+        """直接加载小文档"""
+        try:
+            self.text_edit.setPlainText(self.document.content)
+            self._update_word_count()
+
+            load_time = time.time() - start_time
+
+            # 结束性能监控（成功）
+            monitor = get_performance_monitor()
+            monitor.end_operation(operation_id, "document_load", True, {
+                'load_time': load_time,
+                'content_length': len(self.document.content) if self.document.content else 0,
+                'load_strategy': 'direct'
+            })
+
+            logger.info(f"⚡ 小文档同步加载完成: {load_time:.3f}秒")
+
+        except Exception as e:
+            logger.error(f"小文档加载失败: {e}")
+            # 结束性能监控（失败）
+            monitor = get_performance_monitor()
+            monitor.end_operation(operation_id, "document_load", False, {'error': str(e)})
+            self._fallback_sync_load()
+
+    def _load_medium_document_chunked(self, start_time: float, operation_id: str):
+        """分块加载中等文档"""
+        try:
             def load_in_chunks():
                 try:
                     # 先显示加载提示
@@ -109,14 +216,30 @@ class DocumentTab(QWidget):
 
                     def actual_load():
                         try:
-                            # 分块设置内容
+                            # 优化的分块设置内容
                             self.text_edit.setPlainText(self.document.content)
                             self._update_word_count()
 
                             load_time = time.time() - start_time
-                            logger.info(f"⚡ 大文档异步加载完成: {load_time:.3f}s")
+
+                            # 结束性能监控（成功）
+                            monitor = get_performance_monitor()
+                            monitor.end_operation(operation_id, "document_load", True, {
+                                'load_time': load_time,
+                                'content_length': len(self.document.content) if self.document.content else 0,
+                                'load_strategy': 'chunked'
+                            })
+
+                            logger.info(f"⚡ 中等文档分块加载完成: {load_time:.3f}秒")
+
+                            # 触发预加载
+                            self._trigger_adjacent_preload()
+
                         except Exception as e:
                             logger.error(f"❌ 文档内容加载失败: {e}")
+                            # 结束性能监控（失败）
+                            monitor = get_performance_monitor()
+                            monitor.end_operation(operation_id, "document_load", False, {'error': str(e)})
                             self.text_edit.setPlainText(f"加载失败: {e}")
 
                     # 延迟加载实际内容
@@ -124,18 +247,105 @@ class DocumentTab(QWidget):
 
                 except Exception as e:
                     logger.error(f"❌ 分块加载失败: {e}")
-                    # 回退到同步加载
-                    self.text_edit.setPlainText(self.document.content)
-                    self._update_word_count()
+                    self._fallback_sync_load()
 
             # 立即开始分块加载
             QTimer.singleShot(0, load_in_chunks)
 
         except Exception as e:
-            logger.error(f"❌ 异步内容加载失败: {e}")
-            # 回退到同步加载
-            self.text_edit.setPlainText(self.document.content)
+            logger.error(f"中等文档分块加载失败: {e}")
+            self._fallback_sync_load()
+
+
+
+
+
+
+
+    def _fallback_sync_load(self):
+        """回退到同步加载"""
+        try:
+            self.text_edit.setPlainText(self.document.content or "")
             self._update_word_count()
+            logger.info("回退到同步加载完成")
+        except Exception as e:
+            logger.error(f"同步加载也失败: {e}")
+            self.text_edit.setPlainText("文档加载失败")
+
+    def _replace_text_editor_with_virtual(self):
+        """将普通编辑器替换为虚拟化编辑器"""
+        try:
+            if not self.virtual_editor:
+                return
+
+            # 获取当前布局
+            layout = self.main_splitter.widget(0).parent().layout()
+            if layout:
+                # 移除原有的text_edit
+                old_text_edit = self.text_edit
+                layout.removeWidget(old_text_edit)
+                old_text_edit.setParent(None)
+
+                # 添加虚拟化编辑器
+                self.text_edit = self.virtual_editor
+                self.main_splitter.insertWidget(0, self.virtual_editor)
+
+                # 重新连接信号
+                self._setup_connections()
+
+                logger.debug("已替换为虚拟化编辑器")
+
+        except Exception as e:
+            logger.error(f"替换虚拟化编辑器失败: {e}")
+
+    def _trigger_adjacent_preload(self):
+        """触发相邻文档预加载"""
+        try:
+            if not self.document.project_id:
+                return
+
+            # 获取预加载器
+            preloader = get_document_preloader()
+            if preloader:
+                # 记录文档访问
+                preloader.record_document_access(self.document.id)
+
+                # 异步预加载相邻文档
+                QTimer.singleShot(1000, lambda: asyncio.create_task(
+                    preloader.preload_adjacent_documents(self.document.id, self.document.project_id)
+                ))
+
+                logger.debug(f"已触发相邻文档预加载: {self.document.id}")
+
+        except Exception as e:
+            logger.error(f"触发预加载失败: {e}")
+
+    def _on_virtual_load_completed(self, load_time: float, operation_id: str):
+        """虚拟化加载完成处理"""
+        try:
+            self._update_word_count()
+
+            # 结束性能监控（成功）
+            monitor = get_performance_monitor()
+            monitor.end_operation(operation_id, "document_load", True, {
+                'load_time': load_time,
+                'content_length': len(self.document.content) if self.document.content else 0,
+                'line_count': self.document.content.count('\n') + 1 if self.document.content else 1
+            })
+
+            logger.info(f"✅ 虚拟化加载完成: {self.document.title}, 耗时: {load_time:.3f}秒")
+
+        except Exception as e:
+            logger.error(f"虚拟化加载完成处理失败: {e}")
+
+    def _on_viewport_changed(self, start_line: int, end_line: int):
+        """视口变化处理"""
+        try:
+            logger.debug(f"视口变化: 行{start_line}-{end_line}")
+            # 可以在这里添加额外的视口变化处理逻辑
+
+        except Exception as e:
+            logger.error(f"视口变化处理失败: {e}")
 
     def _setup_ui(self):
         """设置UI"""
@@ -173,10 +383,19 @@ class DocumentTab(QWidget):
         # 始终使用分割器布局（为后续AI面板做准备）
         self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        # 文本编辑器
-        self.text_edit = QTextEdit()
-        self._setup_text_edit()
-        self.main_splitter.addWidget(self.text_edit)
+        # 文本编辑器 - 根据文档大小选择编辑器类型
+        if self.use_virtual_editor:
+            # 创建虚拟化编辑器（稍后在_load_content_async中初始化）
+            self.text_edit = QTextEdit()  # 临时占位符
+            self._setup_text_edit()
+            self.main_splitter.addWidget(self.text_edit)
+            logger.debug(f"将使用虚拟化编辑器: {self.document.title}")
+        else:
+            # 创建普通编辑器
+            self.text_edit = QTextEdit()
+            self._setup_text_edit()
+            self.main_splitter.addWidget(self.text_edit)
+            logger.debug(f"使用普通编辑器: {self.document.title}")
 
         # AI面板将在_setup_ai_panel中添加（如果有AI助手）
         layout.addWidget(self.main_splitter)
@@ -318,7 +537,18 @@ class DocumentTab(QWidget):
             # 方法1：尝试使用兼容性AI服务
             try:
                 from src.application.services.ai import get_ai_service
-                ai_service = get_ai_service()
+                # 创建基本配置用于兼容性接口
+                config = {
+                    'providers': {
+                        'deepseek': {
+                            'api_key': '',
+                            'base_url': 'https://api.deepseek.com/v1',
+                            'default_model': 'deepseek-chat'
+                        }
+                    },
+                    'default_provider': 'deepseek'
+                }
+                ai_service = get_ai_service(config)
                 logger.debug("从兼容性接口获取AI服务成功")
             except Exception as e:
                 logger.debug(f"从兼容性接口获取AI服务失败: {e}")
@@ -1064,6 +1294,21 @@ class EditorWidget(QWidget):
         if isinstance(current_widget, DocumentTab):
             return current_widget
         return None
+
+    def get_current_document(self) -> Optional['Document']:
+        """获取当前文档"""
+        tab = self.get_current_tab()
+        if tab:
+            return tab.document
+        return None
+
+    def save_current_document(self):
+        """保存当前文档"""
+        tab = self.get_current_tab()
+        if tab:
+            tab.save_document()
+        else:
+            logger.warning("没有当前文档可以保存")
     
     def undo(self):
         """撤销"""

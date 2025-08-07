@@ -49,17 +49,39 @@ DEFAULT_WORD_GOAL_DAILY = 1000         # 字
 DEFAULT_WORD_GOAL_WEEKLY = 7000        # 字
 DEFAULT_WORD_GOAL_MONTHLY = 30000      # 字
 
+# 项目相关常量
+DEFAULT_TARGET_WORD_COUNT = 80000      # 默认目标字数
+DEFAULT_RECENT_PROJECTS_LIMIT = 10     # 最近项目显示数量
+DEFAULT_RECENT_DOCUMENTS_LIMIT = 10    # 最近文档显示数量
+DEFAULT_TREND_DAYS = 7                 # 默认趋势分析天数
+DEFAULT_PROJECT_VERSION = "1.0.0"     # 默认项目版本
+DEFAULT_FORMAT_VERSION = "2.0"        # 默认项目格式版本
+COPY_SUFFIX = " - 副本"               # 项目复制后缀
+
 # AI设置默认值
 DEFAULT_AI_CREATIVITY_LEVEL = 0.7      # 0.0-1.0
 DEFAULT_AI_RESPONSE_LENGTH = "medium"  # short, medium, long
 DEFAULT_AI_SUGGESTION_DELAY = 1000     # 毫秒
 DEFAULT_AI_MODEL = "default"
 
+# AI服务配置
+AI_MAX_CONCURRENT_REQUESTS = 20        # AI最大并发请求数
+AI_TIMEOUT_SECONDS = 30.0              # AI请求超时时间（秒）
+AI_RETRY_ATTEMPTS = 3                  # AI请求重试次数
+AI_HEALTH_CHECK_INTERVAL = 30          # AI健康检查间隔（秒）
+AI_MAX_TOKENS = 2000                   # AI最大生成token数
+AI_TEMPERATURE = 0.7                   # AI生成温度
+
 # UI设置
 DEFAULT_WINDOW_WIDTH = 1600            # 像素
 DEFAULT_WINDOW_HEIGHT = 1000           # 像素
-MIN_WINDOW_WIDTH = 800                 # 像素
-MIN_WINDOW_HEIGHT = 600                # 像素
+MIN_WINDOW_WIDTH = 1200                # 像素
+MIN_WINDOW_HEIGHT = 800                # 像素
+
+# UI交互设置
+DEFAULT_STATUS_TIMEOUT = 3000          # 状态消息超时时间（毫秒）
+UI_UPDATE_DELAY_MS = 200               # UI更新延迟（毫秒）
+DOCUMENT_LOAD_DELAY_MS = 50            # 文档加载延迟（毫秒）
 
 # 主题设置
 DEFAULT_THEME = "default"
@@ -208,6 +230,10 @@ MAX_UNDO_STEPS = 100                   # 撤销步数
 MAX_SEARCH_RESULTS = 1000              # 搜索结果数
 MAX_RECENT_FILES = 20                  # 最近文件数
 CACHE_EXPIRE_HOURS = 24                # 缓存过期时间
+CACHE_EXPIRE_SECONDS = 300             # 缓存过期时间（秒）
+
+# 版本管理设置
+VERSION_KEEP_COUNT = 20                # 版本保留数量
 
 # 安全设置
 MAX_LOGIN_ATTEMPTS = 5                 # 最大登录尝试次数

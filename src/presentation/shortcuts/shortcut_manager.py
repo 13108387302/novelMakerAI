@@ -105,7 +105,7 @@ class ShortcutManager(QObject):
             ShortcutInfo("template_manager", "Ctrl+Shift+T", "模板管理器", ShortcutCategory.TOOLS),
             ShortcutInfo("plugin_manager", "Ctrl+Shift+P", "插件管理器", ShortcutCategory.TOOLS),
             ShortcutInfo("settings", "Ctrl+,", "设置", ShortcutCategory.TOOLS),
-            ShortcutInfo("new_document", "Ctrl+Shift+N", "新建文档", ShortcutCategory.TOOLS),
+            # ShortcutInfo("new_document", "Ctrl+Shift+N", "新建文档", ShortcutCategory.TOOLS),  # 暂时禁用，避免冲突
             ShortcutInfo("close_document", "Ctrl+W", "关闭文档", ShortcutCategory.TOOLS),
             ShortcutInfo("next_document", "Ctrl+Tab", "下一个文档", ShortcutCategory.TOOLS),
             ShortcutInfo("previous_document", "Ctrl+Shift+Tab", "上一个文档", ShortcutCategory.TOOLS),

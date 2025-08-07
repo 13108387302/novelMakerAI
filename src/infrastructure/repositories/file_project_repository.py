@@ -109,12 +109,17 @@ class FileProjectRepository(BaseFileRepository[Project], IProjectRepository):
     @handle_async_errors("保存项目")
     async def save(self, project: Project) -> Project:
         """保存项目"""
-        # 如果项目有自定义根路径，也保存到那里
+        # 如果项目有自定义根路径，优先保存到那里
         if hasattr(project, 'root_path') and project.root_path:
             await self._save_to_custom_path(project)
-
-        # 使用基类的保存方法
-        return await super().save(project)
+            # 在编辑器目录保存项目索引信息
+            await self._save_project_index(project)
+            # 同时更新主索引，确保项目可以被找到
+            await self._update_main_index(project)
+            return project
+        else:
+            # 如果没有自定义路径，使用基类的保存方法（保存到编辑器目录）
+            return await super().save(project)
 
     async def _save_to_custom_path(self, project: Project) -> None:
         """保存到自定义路径"""
@@ -151,10 +156,89 @@ class FileProjectRepository(BaseFileRepository[Project], IProjectRepository):
             logger.error(f"保存到自定义路径失败: {e}")
             # 不抛出异常，因为基类保存仍然会成功
 
+    async def _save_project_index(self, project: Project) -> None:
+        """在编辑器目录保存项目索引信息"""
+        try:
+            # 创建项目索引信息（只包含基本信息和路径引用）
+            index_data = {
+                "id": project.id,
+                "title": project.title,
+                "description": project.description,
+                "project_type": project.project_type.value,
+                "status": project.status.value,
+                "root_path": str(project.root_path) if project.root_path else None,
+                "created_at": project.created_at.isoformat(),
+                "updated_at": project.updated_at.isoformat(),
+                "last_opened_at": project.last_opened_at.isoformat() if project.last_opened_at else None,
+                "is_index": True  # 标记这是索引文件
+            }
+
+            # 保存到编辑器目录的索引文件
+            index_path = self.base_path / f"{project.id}_index.json"
+            index_path.parent.mkdir(parents=True, exist_ok=True)
+
+            temp_file = index_path.with_suffix('.tmp')
+            with open(temp_file, 'w', encoding='utf-8') as f:
+                json.dump(index_data, f, indent=2, ensure_ascii=False)
+
+            # 原子性替换
+            temp_file.replace(index_path)
+            logger.info(f"项目索引已保存: {index_path}")
+
+        except Exception as e:
+            logger.error(f"保存项目索引失败: {e}")
+            raise
+
+    async def _update_main_index(self, project: Project) -> None:
+        """更新主索引，确保项目可以被找到"""
+        try:
+            # 使用基类的索引更新方法
+            project_data = await self._entity_to_dict(project)
+            self._update_index_entry(project.id, project_data)
+            logger.info(f"已更新主索引: {project.title} ({project.id})")
+        except Exception as e:
+            logger.error(f"更新主索引失败: {e}")
+
     # 项目特定方法（基类已提供通用的get_by_id）
     async def load(self, project_id: str) -> Optional[Project]:
-        """根据ID加载项目（兼容性方法）"""
-        return await self.get_by_id(project_id)
+        """根据ID加载项目（支持自定义路径）"""
+        try:
+            # 首先尝试从基础路径加载（编辑器目录）
+            project = await self.get_by_id(project_id)
+            if project:
+                logger.debug(f"从基础路径加载项目成功: {project.title}")
+                return project
+
+            # 如果基础路径没有找到，尝试从索引中查找自定义路径
+            logger.debug(f"基础路径未找到项目 {project_id}，尝试从索引查找自定义路径")
+            index = self._load_index()
+
+            if project_id in index:
+                project_info = index[project_id]
+                custom_path = project_info.get('path')
+
+                if custom_path:
+                    custom_path = Path(custom_path)
+                    logger.debug(f"从索引找到自定义路径: {custom_path}")
+
+                    # 使用自定义路径加载项目
+                    project = await self.load_by_path(custom_path)
+                    if project:
+                        logger.info(f"从自定义路径加载项目成功: {project.title} ({custom_path})")
+                        return project
+                    else:
+                        logger.warning(f"自定义路径中的项目文件损坏或不存在: {custom_path}")
+                else:
+                    logger.warning(f"索引中的项目 {project_id} 没有路径信息")
+            else:
+                logger.warning(f"索引中未找到项目: {project_id}")
+
+            logger.warning(f"无法加载项目: {project_id}")
+            return None
+
+        except Exception as e:
+            logger.error(f"加载项目失败: {e}")
+            return None
     
     @handle_async_errors("根据路径加载项目")
     async def load_by_path(self, project_path: Path) -> Optional[Project]:
@@ -181,11 +265,11 @@ class FileProjectRepository(BaseFileRepository[Project], IProjectRepository):
             if hasattr(project, 'root_path'):
                 project.root_path = project_path
 
-            # 更新项目索引中的路径信息
+            # 更新项目索引中的路径信息，如果不存在则添加
             try:
-                await self._update_project_path_in_index(project.id, str(project_path))
+                await self._ensure_project_in_index(project, str(project_path))
             except Exception as e:
-                logger.warning(f"更新项目索引路径失败: {e}")
+                logger.warning(f"确保项目在索引中失败: {e}")
 
             return project
 
@@ -196,8 +280,40 @@ class FileProjectRepository(BaseFileRepository[Project], IProjectRepository):
             logger.error(f"加载项目失败 {project_path}: {e}")
             return None
 
+    async def _ensure_project_in_index(self, project: Project, project_path: str):
+        """确保项目在索引中，如果不存在则添加"""
+        try:
+            index = self._load_index()
+
+            if project.id in index:
+                # 更新路径信息
+                index[project.id]['path'] = project_path
+                index[project.id]['updated_at'] = datetime.now().isoformat()
+                logger.debug(f"已更新项目索引路径: {project.id} -> {project_path}")
+            else:
+                # 项目不在索引中，添加到索引
+                logger.info(f"项目不在索引中，正在添加: {project.id}")
+                index[project.id] = {
+                    'id': project.id,
+                    'title': project.title,
+                    'description': project.description,
+                    'project_type': project.project_type.value,
+                    'status': project.status.value,
+                    'path': project_path,
+                    'created_at': project.created_at.isoformat(),
+                    'updated_at': datetime.now().isoformat(),
+                    'last_opened_at': project.last_opened_at.isoformat() if project.last_opened_at else None
+                }
+                logger.info(f"已添加项目到索引: {project.title} ({project.id})")
+
+            # 保存索引
+            self._save_index(index)
+
+        except Exception as e:
+            logger.error(f"确保项目在索引中失败: {e}")
+
     async def _update_project_path_in_index(self, project_id: str, project_path: str):
-        """更新项目索引中的路径信息"""
+        """更新项目索引中的路径信息（保留向后兼容）"""
         try:
             index = self._load_index()
 

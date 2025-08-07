@@ -19,8 +19,17 @@ from src.domain.ai.value_objects.ai_capability import AICapability
 
 from src.infrastructure.ai.clients.ai_client_factory import AIClientFactory
 from src.infrastructure.ai.clients.base_ai_client import BaseAIClient
+from src.shared.constants import (
+    AI_MAX_CONCURRENT_REQUESTS, AI_TIMEOUT_SECONDS, AI_RETRY_ATTEMPTS,
+    AI_HEALTH_CHECK_INTERVAL
+)
 
 logger = logging.getLogger(__name__)
+
+# AI编排服务常量
+DEFAULT_AI_PROVIDER = 'openai'
+OPENAI_PROVIDER = 'openai'
+DEEPSEEK_PROVIDER = 'deepseek'
 
 
 class AIOrchestrationService:
@@ -47,12 +56,12 @@ class AIOrchestrationService:
         
         # 提供商配置
         self.providers_config = config.get('providers', {})
-        self.default_provider = config.get('default_provider', 'openai')
-        
+        self.default_provider = config.get('default_provider', DEFAULT_AI_PROVIDER)
+
         # 性能配置
-        self.max_concurrent_requests = config.get('max_concurrent_requests', 20)
-        self.request_timeout = config.get('request_timeout', 30.0)
-        self.retry_attempts = config.get('retry_attempts', 3)
+        self.max_concurrent_requests = config.get('max_concurrent_requests', AI_MAX_CONCURRENT_REQUESTS)
+        self.request_timeout = config.get('request_timeout', AI_TIMEOUT_SECONDS)
+        self.retry_attempts = config.get('retry_attempts', AI_RETRY_ATTEMPTS)
         
         # 客户端管理
         self.clients: Dict[str, BaseAIClient] = {}
@@ -67,6 +76,9 @@ class AIOrchestrationService:
         self.successful_requests = 0
         self.failed_requests = 0
         self.start_time = datetime.now()
+
+        # 任务管理
+        self._health_check_task: Optional[asyncio.Task] = None  # 健康检查任务引用
     
     async def initialize(self) -> bool:
         """
@@ -80,7 +92,7 @@ class AIOrchestrationService:
             await self._initialize_clients()
             
             # 启动健康检查
-            asyncio.create_task(self._health_check_loop())
+            self._health_check_task = asyncio.create_task(self._health_check_loop())
             
             self.is_initialized = True
             logger.info("AI编排服务初始化成功")
@@ -278,22 +290,35 @@ class AIOrchestrationService:
     async def shutdown(self) -> None:
         """关闭服务"""
         logger.info("正在关闭AI编排服务...")
-        
+
+        # 首先设置关闭标志，停止健康检查循环
+        self.is_initialized = False
+
+        # 取消健康检查任务
+        if self._health_check_task and not self._health_check_task.done():
+            logger.info("取消健康检查任务...")
+            self._health_check_task.cancel()
+            try:
+                await self._health_check_task
+            except asyncio.CancelledError:
+                logger.info("健康检查任务已取消")
+            except Exception as e:
+                logger.warning(f"取消健康检查任务时出错: {e}")
+
         # 取消所有活动请求
         for request_id in list(self.active_requests.keys()):
             await self.cancel_request(request_id)
-        
+
         # 断开所有客户端
         for client in self.clients.values():
             try:
                 await client.disconnect()
             except Exception as e:
                 logger.warning(f"断开客户端连接失败: {e}")
-        
+
         self.clients.clear()
         self.client_health.clear()
-        self.is_initialized = False
-        
+
         logger.info("AI编排服务已关闭")
     
     async def _initialize_clients(self) -> None:
@@ -302,7 +327,7 @@ class AIOrchestrationService:
             try:
                 # 检查必要的配置
                 if not self._validate_provider_config(provider, config):
-                    logger.warning(f"跳过AI客户端初始化: {provider} (配置不完整)")
+                    logger.info(f"跳过AI客户端初始化: {provider} (配置不完整)")
                     self.client_health[provider] = False
                     continue
 
@@ -323,12 +348,12 @@ class AIOrchestrationService:
 
     def _validate_provider_config(self, provider: str, config: dict) -> bool:
         """验证提供商配置是否完整"""
-        if provider == 'openai':
+        if provider == OPENAI_PROVIDER:
             api_key = config.get('api_key', '').strip()
             if not api_key:
                 logger.info(f"OpenAI API密钥未配置，跳过OpenAI客户端初始化")
                 return False
-        elif provider == 'deepseek':
+        elif provider == DEEPSEEK_PROVIDER:
             api_key = config.get('api_key', '').strip()
             if not api_key:
                 logger.info(f"DeepSeek API密钥未配置，跳过DeepSeek客户端初始化")
@@ -397,11 +422,11 @@ class AIOrchestrationService:
                         logger.error(f"健康检查失败: {provider}, 错误: {e}")
                         self.client_health[provider] = False
                 
-                # 每30秒检查一次
-                await asyncio.sleep(30)
+                # 定期健康检查
+                await asyncio.sleep(AI_HEALTH_CHECK_INTERVAL)
                 
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error(f"健康检查循环错误: {e}")
-                await asyncio.sleep(30)
+                await asyncio.sleep(AI_HEALTH_CHECK_INTERVAL)

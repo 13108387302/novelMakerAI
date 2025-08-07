@@ -18,8 +18,22 @@ import zipfile
 import json
 
 from src.shared.utils.logger import get_logger
+from src.shared.constants import (
+    ENCODING_FORMATS, MAX_DOCUMENT_SIZE, CACHE_EXPIRE_HOURS
+)
 
 logger = get_logger(__name__)
+
+# 文件操作常量
+DEFAULT_ENCODING = ENCODING_FORMATS['utf8']
+DEFAULT_MAX_SIZE_MB = MAX_DOCUMENT_SIZE // (1024 * 1024)  # 转换为MB
+HASH_CHUNK_SIZE = 4096
+TEMP_DIR_NAME = "ai_novel_editor"
+BACKUP_DIR_NAME = "backups"
+BACKUP_SUFFIX = ".backup"
+TEMP_SUFFIX = ".tmp"
+FALLBACK_ENCODINGS = ['gbk', 'latin-1', 'cp1252', 'utf-16']
+DEFAULT_CLEANUP_HOURS = CACHE_EXPIRE_HOURS
 
 
 class FileInfo:
@@ -74,7 +88,7 @@ class FileInfo:
         try:
             hash_md5 = hashlib.md5()
             with open(self.path, 'rb') as f:
-                for chunk in iter(lambda: f.read(4096), b""):
+                for chunk in iter(lambda: f.read(HASH_CHUNK_SIZE), b""):
                     hash_md5.update(chunk)
             self.hash_md5 = hash_md5.hexdigest()
             return self.hash_md5
@@ -113,7 +127,7 @@ class FileManager:
     
     def __init__(self):
         """初始化文件管理器"""
-        self.temp_dir = Path(tempfile.gettempdir()) / "ai_novel_editor"
+        self.temp_dir = Path(tempfile.gettempdir()) / TEMP_DIR_NAME
         self.temp_dir.mkdir(exist_ok=True)
     
     def ensure_directory(self, path: Union[str, Path]) -> bool:
@@ -133,7 +147,7 @@ class FileManager:
             logger.error(f"创建目录失败: {e}")
             return False
 
-    def safe_read(self, path: Union[str, Path], encoding: str = 'utf-8', max_size_mb: int = 100) -> Optional[str]:
+    def safe_read(self, path: Union[str, Path], encoding: str = DEFAULT_ENCODING, max_size_mb: int = DEFAULT_MAX_SIZE_MB) -> Optional[str]:
         """
         安全读取文件内容（增强健壮性版本）
 
@@ -182,8 +196,7 @@ class FileManager:
         except UnicodeDecodeError as e:
             logger.error(f"文件编码错误: {e}")
             # 尝试其他编码
-            fallback_encodings = ['gbk', 'latin-1', 'cp1252', 'utf-16']
-            for fallback_encoding in fallback_encodings:
+            for fallback_encoding in FALLBACK_ENCODINGS:
                 try:
                     with open(file_path, 'r', encoding=fallback_encoding) as f:
                         content = f.read()
@@ -206,7 +219,7 @@ class FileManager:
             logger.error(f"读取文件失败: {e}")
             return None
 
-    def safe_write(self, path: Union[str, Path], content: str, encoding: str = 'utf-8',
+    def safe_write(self, path: Union[str, Path], content: str, encoding: str = DEFAULT_ENCODING,
                    backup: bool = True, atomic: bool = True) -> bool:
         """
         安全写入文件内容（增强健壮性版本）
@@ -249,7 +262,7 @@ class FileManager:
             # 创建备份
             backup_path = None
             if backup and file_path.exists():
-                backup_path = file_path.with_suffix(f"{file_path.suffix}.backup")
+                backup_path = file_path.with_suffix(f"{file_path.suffix}{BACKUP_SUFFIX}")
                 try:
                     shutil.copy2(file_path, backup_path)
                     logger.debug(f"创建备份: {backup_path}")
@@ -258,7 +271,7 @@ class FileManager:
 
             if atomic:
                 # 原子写入：先写临时文件再重命名
-                temp_path = file_path.with_suffix(f"{file_path.suffix}.tmp")
+                temp_path = file_path.with_suffix(f"{file_path.suffix}{TEMP_SUFFIX}")
                 try:
                     with open(temp_path, 'w', encoding=encoding) as f:
                         f.write(content)
@@ -494,7 +507,7 @@ class FileManager:
                 return None
             
             if backup_dir is None:
-                backup_dir = self.temp_dir / "backups"
+                backup_dir = self.temp_dir / BACKUP_DIR_NAME
             
             backup_dir = Path(backup_dir)
             backup_dir.mkdir(parents=True, exist_ok=True)
@@ -525,7 +538,7 @@ class FileManager:
                     arcname = file_path.relative_to(source_dir)
                     zipf.write(file_path, arcname)
     
-    def cleanup_temp_files(self, max_age_hours: int = 24) -> int:
+    def cleanup_temp_files(self, max_age_hours: int = DEFAULT_CLEANUP_HOURS) -> int:
         """
         清理临时文件
         

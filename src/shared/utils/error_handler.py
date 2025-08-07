@@ -11,12 +11,21 @@ from typing import Optional, Dict, Any, Callable
 from functools import wraps
 from datetime import datetime
 
-from PyQt6.QtWidgets import QMessageBox, QWidget
+from PyQt6.QtWidgets import QMessageBox, QWidget, QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTextEdit
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from .logger import get_logger
 
 logger = get_logger(__name__)
+
+# 延迟导入智能恢复系统，避免循环导入
+def _get_recovery_system():
+    """获取智能恢复系统（延迟导入）"""
+    try:
+        from src.shared.stability.intelligent_recovery_system import get_recovery_system, ErrorContext
+        return get_recovery_system(), ErrorContext
+    except ImportError:
+        return None, None
 
 
 class ErrorSeverity:
@@ -122,7 +131,23 @@ class ErrorHandler(QObject):
         super().__init__()
         self.parent_widget = parent_widget
         self.error_callbacks: Dict[str, Callable] = {}
+
+        # 智能恢复系统集成
+        self.recovery_system = None
+        self.error_context_class = None
+        self._initialize_recovery_system()
         
+    def _initialize_recovery_system(self):
+        """初始化智能恢复系统"""
+        try:
+            self.recovery_system, self.error_context_class = _get_recovery_system()
+            if self.recovery_system:
+                logger.info("智能恢复系统已集成到错误处理器")
+            else:
+                logger.debug("智能恢复系统不可用")
+        except Exception as e:
+            logger.warning(f"初始化智能恢复系统失败: {e}")
+
     def register_error_callback(self, error_type: str, callback: Callable):
         """注册错误回调"""
         self.error_callbacks[error_type] = callback
@@ -141,14 +166,14 @@ class ErrorHandler(QObject):
             self._show_critical_error("系统错误处理器异常，请重启应用程序")
             
     def _handle_application_error(self, error: ApplicationError, context: str):
-        """处理应用程序错误"""
+        """处理应用程序错误（增强版本）"""
         error_type = type(error).__name__
-        
+
         # 记录日志
         log_message = f"应用程序错误 [{context}]: {error.message}"
         if error.details:
             log_message += f" - 详情: {error.details}"
-            
+
         if error.severity == ErrorSeverity.CRITICAL:
             logger.critical(log_message)
         elif error.severity == ErrorSeverity.ERROR:
@@ -157,19 +182,29 @@ class ErrorHandler(QObject):
             logger.warning(log_message)
         else:
             logger.info(log_message)
-            
+
+        # 尝试智能恢复（对于严重错误和普通错误）
+        recovery_attempted = False
+        if (self.recovery_system and self.error_context_class and
+            error.severity in [ErrorSeverity.CRITICAL, ErrorSeverity.ERROR]):
+            try:
+                recovery_attempted = self._attempt_intelligent_recovery(error, context)
+            except Exception as e:
+                logger.error(f"智能恢复尝试失败: {e}")
+
         # 发出信号
         self.error_occurred.emit(error.message, error.severity, error.details or "")
-        
+
         # 执行注册的回调
         if error_type in self.error_callbacks:
             try:
                 self.error_callbacks[error_type](error, context)
             except Exception as e:
                 logger.error(f"错误回调执行失败: {e}")
-                
-        # 显示用户界面
-        self._show_error_dialog(error, context)
+
+        # 如果没有尝试智能恢复或恢复失败，显示用户界面
+        if not recovery_attempted:
+            self._show_error_dialog(error, context)
         
     def _handle_system_error(self, error: Exception, context: str):
         """处理系统错误"""
@@ -191,6 +226,94 @@ class ErrorHandler(QObject):
         
         # 显示用户界面
         self._show_error_dialog(app_error, context)
+
+    def _attempt_intelligent_recovery(self, error: ApplicationError, context: str) -> bool:
+        """
+        尝试智能恢复
+
+        Args:
+            error: 应用程序错误
+            context: 错误上下文
+
+        Returns:
+            bool: 是否尝试了恢复（不代表恢复成功）
+        """
+        try:
+            if not self.recovery_system or not self.error_context_class:
+                return False
+
+            # 创建错误上下文
+            error_context = self.error_context_class(
+                exception=Exception(error.message),
+                operation=context or "unknown",
+                component="error_handler",
+                user_data={'original_error': error}
+            )
+
+            # 异步执行恢复（在后台线程中）
+            import threading
+            import asyncio
+
+            def recovery_thread():
+                try:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+
+                    async def perform_recovery():
+                        result = await self.recovery_system.recover_from_error(error_context)
+                        return result
+
+                    result = loop.run_until_complete(perform_recovery())
+                    loop.close()
+
+                    # 在主线程中处理结果
+                    from PyQt6.QtCore import QTimer
+                    QTimer.singleShot(0, lambda: self._handle_recovery_result(result, error, context))
+
+                except Exception as e:
+                    logger.error(f"智能恢复线程异常: {e}")
+                    # 恢复失败，显示错误对话框
+                    QTimer.singleShot(0, lambda: self._show_error_dialog(error, context))
+
+            # 启动恢复线程
+            thread = threading.Thread(target=recovery_thread, daemon=True)
+            thread.start()
+
+            return True  # 表示已尝试恢复
+
+        except Exception as e:
+            logger.error(f"启动智能恢复失败: {e}")
+            return False
+
+    def _handle_recovery_result(self, result, error: ApplicationError, context: str):
+        """处理恢复结果"""
+        try:
+            # 导入恢复结果枚举
+            from src.shared.stability.intelligent_recovery_system import RecoveryResult
+
+            if result == RecoveryResult.SUCCESS:
+                logger.info(f"智能恢复成功: {error.message}")
+                # 成功恢复，不显示错误对话框
+                return
+            elif result == RecoveryResult.PARTIAL_SUCCESS:
+                logger.info(f"智能恢复部分成功: {error.message}")
+                # 部分成功，仍显示对话框但降低严重程度
+                if error.severity == ErrorSeverity.CRITICAL:
+                    error.severity = ErrorSeverity.ERROR
+                elif error.severity == ErrorSeverity.ERROR:
+                    error.severity = ErrorSeverity.WARNING
+            else:
+                logger.warning(f"智能恢复失败: {error.message}, 结果: {result}")
+
+            # 其他情况仍显示错误对话框
+            self._show_error_dialog(error, context)
+
+        except ImportError:
+            logger.warning("无法导入恢复结果枚举，显示错误对话框")
+            self._show_error_dialog(error, context)
+        except Exception as e:
+            logger.error(f"处理恢复结果失败: {e}")
+            self._show_error_dialog(error, context)
         
     def _get_user_friendly_message(self, error: Exception) -> str:
         """获取用户友好的错误消息"""
@@ -212,17 +335,27 @@ class ErrorHandler(QObject):
         return friendly_messages.get(error_type, f"发生了未知错误: {str(error)}")
         
     def _show_error_dialog(self, error: ApplicationError, context: str):
-        """显示错误对话框"""
+        """显示错误对话框（增强版本）"""
         if not self.parent_widget:
             return
-            
+
         try:
+            # 对于严重错误和普通错误，使用智能错误对话框
+            if error.severity in [ErrorSeverity.CRITICAL, ErrorSeverity.ERROR]:
+                try:
+                    dialog = IntelligentErrorDialog(error, context, self.parent_widget)
+                    dialog.exec()
+                    return
+                except Exception as e:
+                    logger.warning(f"智能错误对话框创建失败，使用标准对话框: {e}")
+
+            # 回退到标准对话框
             title = self._get_dialog_title(error.severity)
             message = error.message
-            
+
             if context:
                 message = f"在 {context} 时发生错误:\n\n{message}"
-                
+
             if error.severity == ErrorSeverity.CRITICAL:
                 QMessageBox.critical(self.parent_widget, title, message)
             elif error.severity == ErrorSeverity.ERROR:
@@ -231,10 +364,10 @@ class ErrorHandler(QObject):
                 QMessageBox.warning(self.parent_widget, title, message)
             else:
                 QMessageBox.information(self.parent_widget, title, message)
-                
+
         except Exception as e:
             logger.error(f"显示错误对话框失败: {e}")
-            
+
     def _get_dialog_title(self, severity: str) -> str:
         """获取对话框标题"""
         titles = {
@@ -244,6 +377,235 @@ class ErrorHandler(QObject):
             ErrorSeverity.INFO: "信息"
         }
         return titles.get(severity, "通知")
+
+
+class IntelligentErrorDialog(QDialog):
+    """
+    智能错误对话框
+
+    提供更友好的错误处理界面，包括自动恢复选项
+    """
+
+    def __init__(self, error: ApplicationError, context: str, parent: QWidget = None):
+        super().__init__(parent)
+        self.error = error
+        self.context = context
+        self.recovery_system = None
+        self.error_context_class = None
+
+        # 尝试获取智能恢复系统
+        self.recovery_system, self.error_context_class = _get_recovery_system()
+
+        self.setWindowTitle(self._get_dialog_title())
+        self.setMinimumWidth(500)
+        self.setMinimumHeight(300)
+
+        self._setup_ui()
+        self._setup_connections()
+
+    def _get_dialog_title(self) -> str:
+        """获取对话框标题"""
+        titles = {
+            ErrorSeverity.CRITICAL: "严重错误",
+            ErrorSeverity.ERROR: "错误",
+            ErrorSeverity.WARNING: "警告",
+            ErrorSeverity.INFO: "信息"
+        }
+        return titles.get(self.error.severity, "通知")
+
+    def _setup_ui(self):
+        """设置用户界面"""
+        layout = QVBoxLayout(self)
+
+        # 错误信息区域
+        error_layout = QVBoxLayout()
+
+        # 错误标题
+        title_label = QLabel(f"<h3>{self.error.message}</h3>")
+        error_layout.addWidget(title_label)
+
+        # 上下文信息
+        if self.context:
+            context_label = QLabel(f"<b>发生位置:</b> {self.context}")
+            error_layout.addWidget(context_label)
+
+        # 时间信息
+        time_label = QLabel(f"<b>发生时间:</b> {self.error.timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
+        error_layout.addWidget(time_label)
+
+        layout.addLayout(error_layout)
+
+        # 详细信息（可展开）
+        if self.error.details:
+            details_label = QLabel("<b>详细信息:</b>")
+            layout.addWidget(details_label)
+
+            details_text = QTextEdit()
+            details_text.setPlainText(self.error.details)
+            details_text.setMaximumHeight(150)
+            details_text.setReadOnly(True)
+            layout.addWidget(details_text)
+
+        # 智能恢复选项
+        if self.recovery_system and self.error.severity in [ErrorSeverity.ERROR, ErrorSeverity.CRITICAL]:
+            recovery_layout = self._create_recovery_options()
+            layout.addLayout(recovery_layout)
+
+        # 按钮区域
+        button_layout = QHBoxLayout()
+
+        # 确定按钮
+        ok_button = QPushButton("确定")
+        ok_button.clicked.connect(self.accept)
+        button_layout.addWidget(ok_button)
+
+        # 如果有智能恢复系统，添加恢复按钮
+        if self.recovery_system:
+            recover_button = QPushButton("尝试自动恢复")
+            recover_button.clicked.connect(self._attempt_recovery)
+            button_layout.addWidget(recover_button)
+
+        # 复制错误信息按钮
+        copy_button = QPushButton("复制错误信息")
+        copy_button.clicked.connect(self._copy_error_info)
+        button_layout.addWidget(copy_button)
+
+        layout.addLayout(button_layout)
+
+    def _create_recovery_options(self) -> QVBoxLayout:
+        """创建恢复选项"""
+        layout = QVBoxLayout()
+
+        recovery_label = QLabel("<b>智能恢复选项:</b>")
+        layout.addWidget(recovery_label)
+
+        info_label = QLabel("系统可以尝试自动恢复此错误。点击'尝试自动恢复'按钮开始。")
+        info_label.setWordWrap(True)
+        layout.addWidget(info_label)
+
+        return layout
+
+    def _setup_connections(self):
+        """设置信号连接"""
+        pass
+
+    def _attempt_recovery(self):
+        """尝试自动恢复"""
+        try:
+            if not self.recovery_system or not self.error_context_class:
+                QMessageBox.information(self, "信息", "智能恢复系统不可用")
+                return
+
+            # 创建错误上下文
+            error_context = self.error_context_class(
+                exception=Exception(self.error.message),
+                operation=self.context or "unknown",
+                component="error_handler"
+            )
+
+            # 显示恢复进度
+            progress_dialog = QMessageBox(self)
+            progress_dialog.setWindowTitle("自动恢复")
+            progress_dialog.setText("正在尝试自动恢复，请稍候...")
+            progress_dialog.setStandardButtons(QMessageBox.StandardButton.NoButton)
+            progress_dialog.show()
+
+            # 异步执行恢复
+            import asyncio
+
+            async def perform_recovery():
+                try:
+                    result = await self.recovery_system.recover_from_error(error_context)
+                    return result
+                except Exception as e:
+                    logger.error(f"自动恢复失败: {e}")
+                    return None
+
+            # 在新线程中执行恢复
+            import threading
+
+            def recovery_thread():
+                try:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    result = loop.run_until_complete(perform_recovery())
+                    loop.close()
+
+                    # 在主线程中显示结果
+                    from PyQt6.QtCore import QTimer
+                    QTimer.singleShot(0, lambda: self._show_recovery_result(result, progress_dialog))
+
+                except Exception as e:
+                    logger.error(f"恢复线程异常: {e}")
+                    QTimer.singleShot(0, lambda: self._show_recovery_result(None, progress_dialog))
+
+            thread = threading.Thread(target=recovery_thread, daemon=True)
+            thread.start()
+
+        except Exception as e:
+            logger.error(f"启动自动恢复失败: {e}")
+            QMessageBox.critical(self, "错误", f"启动自动恢复失败: {e}")
+
+    def _show_recovery_result(self, result, progress_dialog):
+        """显示恢复结果"""
+        try:
+            progress_dialog.close()
+
+            if result is None:
+                QMessageBox.warning(self, "恢复失败", "自动恢复过程中发生错误")
+                return
+
+            # 导入恢复结果枚举
+            try:
+                from src.shared.stability.intelligent_recovery_system import RecoveryResult
+
+                if result == RecoveryResult.SUCCESS:
+                    QMessageBox.information(self, "恢复成功", "问题已成功自动恢复！")
+                    self.accept()  # 关闭错误对话框
+                elif result == RecoveryResult.PARTIAL_SUCCESS:
+                    QMessageBox.information(self, "部分恢复", "问题已部分恢复，可能仍需要手动处理")
+                elif result == RecoveryResult.USER_CANCELLED:
+                    QMessageBox.information(self, "用户取消", "自动恢复已被用户取消")
+                elif result == RecoveryResult.REQUIRES_RESTART:
+                    reply = QMessageBox.question(
+                        self, "需要重启",
+                        "恢复需要重启应用程序，是否现在重启？",
+                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                    )
+                    if reply == QMessageBox.StandardButton.Yes:
+                        # 这里需要实现应用程序重启逻辑
+                        QMessageBox.information(self, "信息", "请手动重启应用程序")
+                else:
+                    QMessageBox.warning(self, "恢复失败", "自动恢复未能解决问题，请手动处理")
+
+            except ImportError:
+                QMessageBox.warning(self, "恢复失败", "无法确定恢复结果")
+
+        except Exception as e:
+            logger.error(f"显示恢复结果失败: {e}")
+            QMessageBox.critical(self, "错误", f"显示恢复结果失败: {e}")
+
+    def _copy_error_info(self):
+        """复制错误信息到剪贴板"""
+        try:
+            from PyQt6.QtWidgets import QApplication
+
+            error_info = f"""错误信息: {self.error.message}
+发生位置: {self.context or '未知'}
+发生时间: {self.error.timestamp.strftime('%Y-%m-%d %H:%M:%S')}
+严重程度: {self.error.severity}
+
+详细信息:
+{self.error.details or '无'}"""
+
+            clipboard = QApplication.clipboard()
+            clipboard.setText(error_info)
+
+            QMessageBox.information(self, "信息", "错误信息已复制到剪贴板")
+
+        except Exception as e:
+            logger.error(f"复制错误信息失败: {e}")
+            QMessageBox.warning(self, "警告", f"复制失败: {e}")
         
     def _show_critical_error(self, message: str):
         """显示严重错误（兜底处理）"""

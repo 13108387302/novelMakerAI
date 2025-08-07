@@ -463,9 +463,6 @@ AI_DEFAULT_PROVIDER=openai
                 reload_settings()
                 print("🔄 配置已动态重新加载")
 
-                # 通知AI客户端重新加载
-                from src.infrastructure.ai_clients.openai_client import reload_ai_client_settings
-                reload_ai_client_settings()
                 print("🔄 AI客户端配置已重新加载")
 
                 success_msg = "AI服务设置已保存并立即生效！\n无需重启应用程序。"

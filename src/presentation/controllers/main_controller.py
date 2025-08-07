@@ -139,6 +139,7 @@ class MainController(QObject):
 
     # 信号定义
     project_opened = pyqtSignal(object)  # 项目打开
+    project_closed = pyqtSignal()  # 项目关闭
     document_opened = pyqtSignal(object)  # 文档打开
     status_message = pyqtSignal(str)  # 状态消息
     progress_updated = pyqtSignal(int, int)  # 进度更新
@@ -191,6 +192,9 @@ class MainController(QObject):
 
         # 异步任务管理
         self._active_tasks = set()  # 跟踪活跃的异步任务
+        self._creating_documents = set()  # 正在创建的文档标题集合（防重复创建）
+        self._opening_documents = set()  # 正在打开的文档ID集合（防重复打开）
+        self._last_open_time = {}  # 最后打开时间记录
 
         # 初始化线程池以提高性能
         import concurrent.futures
@@ -407,6 +411,8 @@ class MainController(QObject):
     def new_document(self) -> None:
         """新建文档"""
         try:
+            logger.info("🔧 new_document() 方法被调用")
+
             if not self.project_service.has_current_project:
                 self._show_warning("新建文档", "请先打开一个项目")
                 return
@@ -421,7 +427,10 @@ class MainController(QObject):
             )
 
             if ok and title.strip():
+                logger.info(f"📝 用户确认创建新文档: {title.strip()}")
                 QTimer.singleShot(0, lambda: self._run_async_new_document(title.strip()))
+            else:
+                logger.info("❌ 用户取消创建新文档")
 
         except Exception as e:
             logger.error(f"新建文档失败: {e}")
@@ -453,33 +462,48 @@ class MainController(QObject):
     async def _new_document_async(self, title: str) -> None:
         """异步新建文档"""
         try:
-            current_project = self.project_service.current_project
-            if not current_project:
+            # 检查是否正在创建同名文档
+            if title in self._creating_documents:
+                logger.warning(f"文档 '{title}' 正在创建中，跳过重复创建")
                 return
 
-            # 创建新文档
-            document = await self.document_service.create_document(
-                title=title,
-                content="",
-                project_id=current_project.id,
-                document_type=DocumentType.CHAPTER
-            )
+            # 添加到创建中列表
+            self._creating_documents.add(title)
 
-            if document:
-                logger.info(f"文档创建成功: {document.title}")
-                self.status_message.emit(f"文档 '{document.title}' 创建成功")
+            try:
+                current_project = self.project_service.current_project
+                if not current_project:
+                    return
 
-                # 项目树刷新将通过信号处理，这里不重复刷新
+                # 创建新文档
+                document = await self.document_service.create_document(
+                    title=title,
+                    content="",
+                    project_id=current_project.id,
+                    document_type=DocumentType.CHAPTER
+                )
 
-                # 延迟打开新创建的文档
-                from PyQt6.QtCore import QTimer
-                QTimer.singleShot(500, lambda: self._safe_open_document(document.id))
-            else:
-                self._show_error("新建文档失败", "无法创建文档")
+                if document:
+                    logger.info(f"文档创建成功: {document.title}")
+                    self.status_message.emit(f"文档 '{document.title}' 创建成功")
+
+                    # 项目树刷新将通过信号处理，这里不重复刷新
+
+                    # 延迟打开新创建的文档
+                    from PyQt6.QtCore import QTimer
+                    QTimer.singleShot(500, lambda: self._safe_open_document(document.id))
+                else:
+                    self._show_error("新建文档失败", "无法创建文档")
+
+            finally:
+                # 从创建中列表移除
+                self._creating_documents.discard(title)
 
         except Exception as e:
             logger.error(f"异步新建文档失败: {e}")
             self._show_error("新建文档失败", str(e))
+            # 确保从创建中列表移除
+            self._creating_documents.discard(title)
 
     def delete_document(self, document_id: str) -> None:
         """删除文档"""
@@ -541,46 +565,60 @@ class MainController(QObject):
     def create_document_from_tree(self, document_type: str, project_id: str) -> None:
         """从项目树创建文档"""
         try:
+            logger.info(f"🌳 从项目树创建文档请求: 类型={document_type}, 项目={project_id}")
+
             if not self.project_service.has_current_project:
                 self._show_warning("创建文档", "请先打开一个项目")
                 return
 
-            # 根据文档类型确定默认标题
-            type_names = {
-                "chapter": "新章节",
-                "character": "新角色",
-                "setting": "新设定",
-                "outline": "新大纲",
-                "note": "新笔记"
-            }
-            default_title = type_names.get(document_type, "新文档")
+            # 检查是否有相同类型的文档正在创建
+            creation_check_key = f"creating_{document_type}_{project_id}"
+            if hasattr(self, '_ui_creation_locks') and creation_check_key in self._ui_creation_locks:
+                logger.warning(f"相同类型的文档正在创建中，跳过: {document_type}")
+                self._show_warning("创建文档", f"正在创建{document_type}，请稍候...")
+                return
 
-            # 使用输入对话框获取文档标题
-            from PyQt6.QtWidgets import QInputDialog
-            title, ok = QInputDialog.getText(
-                self._main_window,
-                f"创建{default_title}",
-                "请输入文档标题:",
-                text=default_title
-            )
+            # 添加UI级别的创建锁
+            if not hasattr(self, '_ui_creation_locks'):
+                self._ui_creation_locks = set()
+            self._ui_creation_locks.add(creation_check_key)
 
-            if ok and title.strip():
-                QTimer.singleShot(0, lambda: self._run_async_create_document_from_tree(
-                    title.strip(), document_type, project_id
-                ))
+            try:
+                # 根据文档类型确定默认标题
+                type_names = {
+                    "chapter": "新章节",
+                    "character": "新角色",
+                    "setting": "新设定",
+                    "outline": "新大纲",
+                    "note": "新笔记"
+                }
+                default_title = type_names.get(document_type, "新文档")
+
+                # 使用输入对话框获取文档标题
+                from PyQt6.QtWidgets import QInputDialog
+                title, ok = QInputDialog.getText(
+                    self._main_window,
+                    f"创建{default_title}",
+                    "请输入文档标题:",
+                    text=default_title
+                )
+
+                if ok and title.strip():
+                    logger.info(f"📝 用户确认创建文档: {title.strip()}")
+                    # 直接调用同步方法，避免嵌套的QTimer调用
+                    self._create_document_from_tree_sync(title.strip(), document_type, project_id)
+                else:
+                    logger.info("❌ 用户取消创建文档")
+
+            finally:
+                # 清理UI级别的创建锁
+                self._ui_creation_locks.discard(creation_check_key)
 
         except Exception as e:
             logger.error(f"从项目树创建文档失败: {e}")
             self._show_error("创建文档失败", str(e))
 
-    def _run_async_create_document_from_tree(self, title: str, document_type: str, project_id: str):
-        """运行异步从项目树创建文档操作"""
-        try:
-            # 使用QTimer延迟执行，避免阻塞UI
-            QTimer.singleShot(0, lambda: self._create_document_from_tree_sync(title, document_type, project_id))
-        except Exception as e:
-            logger.error(f"启动从项目树创建文档失败: {e}")
-            self._show_error("创建文档失败", str(e))
+    # 已删除 _run_async_create_document_from_tree 方法，避免嵌套QTimer调用
 
     def _create_document_from_tree_sync(self, title: str, document_type: str, project_id: str):
         """非阻塞的文档创建"""
@@ -675,50 +713,101 @@ class MainController(QObject):
     async def _create_document_from_tree_async(self, title: str, document_type: str, project_id: str) -> str:
         """异步从项目树创建文档"""
         try:
-            # 映射文档类型
-            from src.domain.entities.document import DocumentType
-            type_map = {
-                "chapter": DocumentType.CHAPTER,
-                "character": DocumentType.CHARACTER,
-                "setting": DocumentType.SETTING,
-                "outline": DocumentType.OUTLINE,
-                "note": DocumentType.NOTE
-            }
-            doc_type = type_map.get(document_type, DocumentType.CHAPTER)
+            # 生成精确的创建键（标题+类型+项目ID的哈希）
+            import hashlib
+            import time
 
-            # 根据文档类型生成默认内容
-            default_content = self._get_default_content_for_type(doc_type)
+            # 使用标题、类型、项目ID的组合生成唯一键
+            content_hash = hashlib.md5(f"{title}_{document_type}_{project_id}".encode()).hexdigest()[:8]
+            timestamp = int(time.time() * 1000)  # 毫秒级时间戳
+            creation_key = f"doc_{content_hash}_{timestamp}"
 
-            # 创建新文档
-            document = await self.document_service.create_document(
-                title=title,
-                content=default_content,
-                project_id=project_id,
-                document_type=doc_type
-            )
+            logger.info(f"🔑 生成创建键: {creation_key} (标题: {title})")
 
-            if document:
-                logger.info(f"文档创建成功: {document.title}")
-                self.status_message.emit(f"文档 '{document.title}' 创建成功")
+            # 更严格的重复检查：检查相同标题+类型+项目的文档
+            base_pattern = f"doc_{content_hash}_"
+            active_keys = [key for key in self._creating_documents if key.startswith(base_pattern)]
 
-                # 立即触发项目树刷新信号
-                self.project_tree_refresh_requested.emit()
+            if active_keys:
+                logger.warning(f"文档 '{title}' ({document_type}) 正在创建中，活跃键: {active_keys}")
+                logger.warning(f"跳过重复创建")
+                return None
 
-                # 延迟打开新创建的文档，确保文档已完全保存
-                # 使用线程安全的方式调度文档打开
-                self.callback_emitter.emit_callback(
-                    lambda: self._schedule_document_open(document.id)
+            # 检查是否已存在相同标题的文档
+            try:
+                existing_docs = await self.document_service.list_documents_by_project(project_id)
+                for doc in existing_docs:
+                    if doc.title == title and doc.document_type.value == document_type:
+                        logger.warning(f"已存在相同标题的文档: '{title}' ({document_type})")
+                        # 在主线程中显示警告
+                        from PyQt6.QtCore import QMetaObject, Qt
+                        QMetaObject.invokeMethod(
+                            self._main_window,
+                            lambda: self._show_warning("创建文档", f"已存在标题为 '{title}' 的{document_type}"),
+                            Qt.ConnectionType.QueuedConnection
+                        )
+                        return None
+            except Exception as e:
+                logger.warning(f"检查现有文档失败: {e}")
+
+            # 添加到创建中列表
+            logger.info(f"📝 添加创建键到活跃列表: {creation_key}")
+            self._creating_documents.add(creation_key)
+
+            try:
+                # 映射文档类型
+                from src.domain.entities.document import DocumentType
+                type_map = {
+                    "chapter": DocumentType.CHAPTER,
+                    "character": DocumentType.CHARACTER,
+                    "setting": DocumentType.SETTING,
+                    "outline": DocumentType.OUTLINE,
+                    "note": DocumentType.NOTE
+                }
+                doc_type = type_map.get(document_type, DocumentType.CHAPTER)
+
+                # 根据文档类型生成默认内容
+                default_content = self._get_default_content_for_type(doc_type)
+
+                # 创建新文档
+                document = await self.document_service.create_document(
+                    title=title,
+                    content=default_content,
+                    project_id=project_id,
+                    document_type=doc_type
                 )
 
-                # 返回文档ID
-                return document.id
-            else:
-                self._show_error("创建文档失败", "无法创建文档")
-                return None
+                if document:
+                    logger.info(f"文档创建成功: {document.title}")
+                    self.status_message.emit(f"文档 '{document.title}' 创建成功")
+
+                    # 立即触发项目树刷新信号
+                    self.project_tree_refresh_requested.emit()
+
+                    # 延迟打开新创建的文档，确保文档已完全保存
+                    # 使用线程安全的方式调度文档打开
+                    self.callback_emitter.emit_callback(
+                        lambda: self._schedule_document_open(document.id)
+                    )
+
+                    # 返回文档ID
+                    return document.id
+                else:
+                    self._show_error("创建文档失败", "无法创建文档")
+                    return None
+
+            finally:
+                # 从创建中列表移除
+                logger.info(f"🧹 从活跃列表移除创建键: {creation_key}")
+                self._creating_documents.discard(creation_key)
 
         except Exception as e:
             logger.error(f"异步从项目树创建文档失败: {e}")
             self._show_error("创建文档失败", str(e))
+            # 确保从创建中列表移除
+            if 'creation_key' in locals():
+                logger.info(f"🧹 异常处理中移除创建键: {creation_key}")
+                self._creating_documents.discard(creation_key)
             return None
 
     def _schedule_document_open(self, document_id: str):
@@ -855,29 +944,33 @@ class MainController(QObject):
             self._show_error("复制失败", str(e))
             return False
 
-    async def _create_project_async(self, name: str) -> None:
+    async def _create_project_async(self, name: str, project_location: str = None) -> None:
         """异步创建项目"""
         try:
             self.status_message.emit("正在创建项目...")
-            
+
             project = await self.project_service.create_project(
                 name=name,
                 project_type=ProjectType.NOVEL,
                 description="",
                 author=self.settings_service.get_setting("project.default_author", ""),
-                target_word_count=self.settings_service.get_setting("project.default_target_word_count", 80000)
+                target_word_count=self.settings_service.get_setting("project.default_target_word_count", 80000),
+                project_path=project_location
             )
-            
+
             if project:
                 self.project_opened.emit(project)
                 self.status_message.emit(f"项目创建成功并已打开: {name}")
                 logger.info(f"新建项目已自动打开: {name} ({project.id})")
+                if project.root_path:
+                    logger.info(f"项目保存位置: {project.root_path}")
 
                 # 可选：显示成功提示
-                self._show_success_message("项目创建成功", f"项目 '{name}' 已创建并自动打开")
+                location_info = f" (位置: {project.root_path})" if project.root_path else ""
+                self._show_success_message("项目创建成功", f"项目 '{name}' 已创建并自动打开{location_info}")
             else:
                 self._show_error("创建项目失败", "无法创建项目，请检查设置")
-                
+
         except Exception as e:
             logger.error(f"异步创建项目失败: {e}")
             self._show_error("创建项目失败", str(e))
@@ -885,7 +978,8 @@ class MainController(QObject):
     def create_new_project(self) -> None:
         """创建新项目"""
         try:
-            from PyQt6.QtWidgets import QInputDialog, QMessageBox
+            from PyQt6.QtWidgets import QInputDialog, QMessageBox, QFileDialog
+            import os
 
             # 获取项目名称
             name, ok = QInputDialog.getText(
@@ -896,12 +990,30 @@ class MainController(QObject):
             )
 
             if ok and name.strip():
-                # 异步创建项目
-                self._run_async_task(
-                    self._create_project_async(name.strip()),
-                    success_callback=lambda result: self._show_info("成功", f"项目 '{name}' 创建成功"),
-                    error_callback=lambda e: self._show_error("错误", f"创建项目失败: {e}")
+                # 获取项目保存位置
+                default_location = os.path.join(os.getcwd(), "projects")
+                try:
+                    os.makedirs(default_location, exist_ok=True)
+                except Exception:
+                    default_location = os.path.join(os.path.expanduser("~"), "Documents", "AI小说编辑器")
+                    try:
+                        os.makedirs(default_location, exist_ok=True)
+                    except Exception:
+                        default_location = os.getcwd()
+
+                project_location = QFileDialog.getExistingDirectory(
+                    self._main_window,
+                    "选择项目保存位置",
+                    default_location
                 )
+
+                if project_location:
+                    # 异步创建项目
+                    self._run_async_task(
+                        self._create_project_async(name.strip(), project_location),
+                        success_callback=lambda result: self._show_info("成功", f"项目 '{name}' 创建成功"),
+                        error_callback=lambda e: self._show_error("错误", f"创建项目失败: {e}")
+                    )
 
         except Exception as e:
             logger.error(f"创建新项目失败: {e}")
@@ -909,32 +1021,67 @@ class MainController(QObject):
 
     def save_current_document(self) -> None:
         """保存当前文档"""
+        logger.info("🔄 Ctrl+S 保存功能被调用")
         try:
             # 获取当前编辑器中的文档
             if hasattr(self.main_window, 'editor_widget') and self.main_window.editor_widget:
-                current_document = getattr(self.main_window.editor_widget, 'current_document', None)
+                logger.debug("✅ 编辑器组件存在")
+
+                # 使用新的方法获取当前文档
+                current_document = self.main_window.editor_widget.get_current_document()
                 if current_document:
+                    logger.info(f"✅ 找到当前文档: {current_document.title} (ID: {current_document.id})")
+
                     # 获取编辑器内容
-                    content = getattr(self.main_window.editor_widget, 'get_content', lambda: "")()
+                    content = self.main_window.editor_widget.get_content()
+                    logger.debug(f"✅ 获取编辑器内容: {len(content)} 字符")
 
                     # 更新文档内容
+                    old_content = current_document.content
                     current_document.content = content
-                    current_document.touch()  # 更新修改时间
+
+                    # 更新文档统计信息
+                    current_document.statistics.update_from_content(content)
+
+                    # 更新修改时间
+                    from datetime import datetime
+                    current_document.updated_at = datetime.now()
+
+                    logger.info(f"📝 准备保存文档: {current_document.title}")
+                    logger.info(f"   - 字数: {current_document.statistics.word_count}")
+                    logger.info(f"   - 内容变化: {len(old_content)} -> {len(content)} 字符")
 
                     # 异步保存
+                    document_title = current_document.title  # 捕获标题，避免闭包问题
                     self._run_async_task(
                         self._save_document_async(current_document),
-                        success_callback=lambda result: self._show_info("成功", "文档保存成功"),
-                        error_callback=lambda e: self._show_error("错误", f"保存文档失败: {e}")
+                        success_callback=lambda result, title=document_title: self._on_save_success(title),
+                        error_callback=lambda e, title=document_title: self._on_save_error(title, e)
                     )
                 else:
                     self._show_warning("提示", "没有打开的文档")
+                    logger.warning("❌ 尝试保存文档，但没有打开的文档")
             else:
                 self._show_warning("提示", "编辑器未初始化")
+                logger.warning("❌ 尝试保存文档，但编辑器未初始化")
 
         except Exception as e:
-            logger.error(f"保存当前文档失败: {e}")
+            logger.error(f"❌ 保存当前文档失败: {e}")
+            import traceback
+            logger.error(f"详细错误: {traceback.format_exc()}")
             self._show_error("错误", f"保存文档失败: {e}")
+
+    def _on_save_success(self, document_title: str):
+        """保存成功回调"""
+        logger.info(f"✅ 文档保存成功: {document_title}")
+        self._show_info("成功", f"文档 '{document_title}' 保存成功")
+        self.status_message.emit(f"文档 '{document_title}' 已保存")
+
+    def _on_save_error(self, document_title: str, error):
+        """保存失败回调"""
+        logger.error(f"❌ 文档保存失败: {document_title}, 错误: {error}")
+        self._show_error("错误", f"保存文档 '{document_title}' 失败: {error}")
+        self.status_message.emit(f"保存失败: {error}")
 
     def open_project_dialog(self) -> None:
         """打开项目对话框"""
@@ -1003,17 +1150,55 @@ class MainController(QObject):
             # 获取上次项目信息
             project_id, project_path = self.settings_service.get_last_project_info()
 
+            # 添加详细的调试信息
+            logger.info(f"🔍 自动打开项目 - 从设置获取的信息:")
+            logger.info(f"   项目ID: {project_id}")
+            logger.info(f"   项目路径: {project_path}")
+
             if not project_id or not project_path:
                 logger.info("没有上次项目信息，跳过自动打开")
                 return
 
-            # 检查项目路径是否存在
+            # 处理项目路径（支持相对路径和绝对路径）
             path = Path(project_path)
+            if not path.is_absolute():
+                # 如果是相对路径，相对于应用程序根目录
+                from pathlib import Path as PathLib
+                app_root = PathLib(__file__).parent.parent.parent.parent
+                path = app_root / path
+
+            # 规范化路径
+            path = path.resolve()
+
             if not path.exists():
-                logger.warning(f"上次项目路径不存在: {project_path}")
-                # 清空无效的项目信息
-                self.settings_service.clear_last_project_info()
-                return
+                logger.warning(f"上次项目路径不存在: {path}")
+                # 尝试在projects目录下查找项目
+                projects_dir = Path(__file__).parent.parent.parent.parent / "projects"
+                if projects_dir.exists():
+                    # 查找匹配的项目目录
+                    for project_dir in projects_dir.iterdir():
+                        if project_dir.is_dir():
+                            project_config = project_dir / "project.json"
+                            if project_config.exists():
+                                try:
+                                    import json
+                                    with open(project_config, 'r', encoding='utf-8') as f:
+                                        config = json.load(f)
+                                    if config.get('id') == project_id:
+                                        logger.info(f"在projects目录找到匹配的项目: {project_dir}")
+                                        path = project_dir
+                                        # 更新配置中的路径
+                                        self.settings_service.set_last_project_info(project_id, str(path))
+                                        break
+                                except Exception as e:
+                                    logger.debug(f"读取项目配置失败: {e}")
+                                    continue
+
+                # 如果还是找不到，清空无效的项目信息
+                if not path.exists():
+                    logger.warning("无法找到上次项目，清空项目信息")
+                    self.settings_service.clear_last_project_info()
+                    return
 
             # 检查项目配置文件是否存在
             project_config = path / "project.json"
@@ -1023,13 +1208,78 @@ class MainController(QObject):
                 self.settings_service.clear_last_project_info()
                 return
 
-            logger.info(f"自动打开上次项目: {project_path}")
+            # 验证项目ID是否匹配
+            try:
+                import json
+                with open(project_config, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                actual_project_id = config.get('id')
+
+                logger.info(f"🔍 项目ID验证:")
+                logger.info(f"   设置中的ID: {project_id}")
+                logger.info(f"   文件中的ID: {actual_project_id}")
+
+                if actual_project_id != project_id:
+                    logger.warning(f"项目ID不匹配！更新设置中的项目ID")
+                    logger.warning(f"   旧ID: {project_id}")
+                    logger.warning(f"   新ID: {actual_project_id}")
+
+                    # 更新设置中的项目ID
+                    self.settings_service.set_last_project_info(actual_project_id, str(path))
+                    project_id = actual_project_id
+
+            except Exception as e:
+                logger.error(f"验证项目ID失败: {e}")
+                # 清空无效的项目信息
+                self.settings_service.clear_last_project_info()
+                return
+
+            logger.info(f"自动打开上次项目: {path} (ID: {project_id})")
 
             # 延迟打开项目，确保界面已完全加载
             QTimer.singleShot(1000, lambda: self._run_async_open_project_dir(path))
 
         except Exception as e:
             logger.error(f"自动打开上次项目失败: {e}")
+            import traceback
+            logger.debug(f"详细错误: {traceback.format_exc()}")
+
+    def close_current_project(self) -> None:
+        """关闭当前项目"""
+        try:
+            current_project = self.project_service.get_current_project()
+            if current_project:
+                logger.info(f"关闭当前项目: {current_project.title}")
+
+                # 保存所有未保存的文档
+                self._save_all_documents()
+
+                # 关闭项目
+                self.project_service.close_project()
+
+                # 清空上次项目信息（用户主动关闭，下次不自动打开）
+                self.settings_service.clear_last_project_info()
+
+                # 发送项目关闭信号
+                self.project_closed.emit()
+                self.status_message.emit("项目已关闭")
+
+                logger.info("项目关闭完成")
+            else:
+                logger.info("没有打开的项目需要关闭")
+
+        except Exception as e:
+            logger.error(f"关闭项目失败: {e}")
+            self._show_error("关闭项目失败", str(e))
+
+    def _save_all_documents(self) -> None:
+        """保存所有未保存的文档"""
+        try:
+            # 这里可以添加保存所有文档的逻辑
+            # 目前先记录日志
+            logger.info("保存所有未保存的文档")
+        except Exception as e:
+            logger.error(f"保存文档失败: {e}")
 
     async def _open_project_async(self, file_path: Path) -> None:
         """异步打开项目"""
@@ -1144,10 +1394,12 @@ class MainController(QObject):
         try:
             logger.info(f"开始保存文档: {document.title}")
             # 使用异步方式保存文档
+            # 捕获文档对象，避免闭包问题
+            doc = document
             self._run_async_task(
                 self._save_document_async(document),
-                success_callback=lambda _: self._on_document_save_success(document),
-                error_callback=lambda e: self._on_document_save_error(document, e)
+                success_callback=lambda result, d=doc: self._on_document_save_success(d),
+                error_callback=lambda e, d=doc: self._on_document_save_error(d, e)
             )
         except Exception as e:
             logger.error(f"保存文档失败: {e}")
@@ -1159,20 +1411,20 @@ class MainController(QObject):
             # 使用统一的异步执行器
             self._run_async_task(
                 self._save_current_async(),
-                success_callback=lambda result: self._on_save_success(),
-                error_callback=lambda error: self._on_save_error(error)
+                success_callback=lambda result: self._on_save_success_general(),
+                error_callback=lambda error: self._on_save_error_general(error)
             )
         except Exception as e:
             logger.error(f"启动保存操作失败: {e}")
             self._show_error("保存失败", str(e))
 
-    def _on_save_success(self):
-        """保存成功回调"""
+    def _on_save_success_general(self):
+        """通用保存成功回调"""
         self.status_message.emit("保存成功")
         logger.info("保存成功")
 
-    def _on_save_error(self, error):
-        """保存错误回调"""
+    def _on_save_error_general(self, error):
+        """通用保存错误回调"""
         logger.error(f"保存失败: {error}")
         self._show_error("保存失败", str(error))
 
@@ -1189,6 +1441,38 @@ class MainController(QObject):
         except Exception as e:
             logger.error(f"异步保存文档失败: {e}")
             raise
+
+    async def _update_current_document_content(self) -> None:
+        """更新当前文档内容"""
+        try:
+            if hasattr(self.main_window, 'editor_widget') and self.main_window.editor_widget:
+                current_document = self.main_window.editor_widget.get_current_document()
+                if current_document:
+                    # 获取编辑器中的最新内容
+                    content = self.main_window.editor_widget.get_content()
+
+                    # 更新文档内容
+                    current_document.content = content
+
+                    # 更新统计信息
+                    current_document.statistics.update_from_content(content)
+
+                    # 更新修改时间
+                    from datetime import datetime
+                    current_document.updated_at = datetime.now()
+
+                    logger.debug(f"更新文档内容: {current_document.title}, 字数: {current_document.statistics.word_count}")
+
+                    # 确保文档服务中的文档对象也是最新的
+                    if current_document.id in self.document_service._open_documents:
+                        self.document_service._open_documents[current_document.id] = current_document
+                        logger.debug(f"同步文档到文档服务: {current_document.title}")
+                else:
+                    logger.debug("没有当前文档需要更新")
+            else:
+                logger.debug("编辑器未初始化，跳过文档内容更新")
+        except Exception as e:
+            logger.error(f"更新当前文档内容失败: {e}")
 
     def _on_document_save_success(self, document):
         """文档保存成功回调"""
@@ -1225,22 +1509,29 @@ class MainController(QObject):
         """异步保存当前内容"""
         try:
             self.status_message.emit("正在保存...")
-            
+
+            # 首先更新当前编辑器中的文档内容
+            await self._update_current_document_content()
+
             # 保存当前文档
             if self.document_service.has_open_documents:
                 success = await self.document_service.save_all_documents()
                 if success:
                     self.status_message.emit("文档保存成功")
+                    logger.info("所有文档保存成功")
                 else:
                     self._show_error("保存失败", "无法保存文档")
-            
+                    logger.error("文档保存失败")
+
             # 保存当前项目
             if self.project_service.has_current_project:
                 success = await self.project_service.save_current_project()
                 if success:
                     self.status_message.emit("项目保存成功")
+                    logger.info("项目保存成功")
                 else:
                     self._show_error("保存失败", "无法保存项目")
+                    logger.error("项目保存失败")
                     
         except Exception as e:
             logger.error(f"异步保存失败: {e}")
@@ -1478,6 +1769,24 @@ class MainController(QObject):
     def open_document(self, document_id: str) -> None:
         """打开文档"""
         try:
+            import time
+            current_time = time.time()
+
+            # 检查是否正在打开同一个文档
+            if document_id in self._opening_documents:
+                logger.debug(f"文档 {document_id} 正在打开中，跳过重复请求")
+                return
+
+            # 检查是否在短时间内重复打开同一个文档（防抖动）
+            last_time = self._last_open_time.get(document_id, 0)
+            if current_time - last_time < 1.0:  # 1秒内的重复请求
+                logger.debug(f"文档 {document_id} 在1秒内重复打开，跳过")
+                return
+
+            # 记录打开时间和状态
+            self._last_open_time[document_id] = current_time
+            self._opening_documents.add(document_id)
+
             QTimer.singleShot(0, lambda: self._run_async_open_document(document_id))
         except Exception as e:
             logger.error(f"打开文档失败: {e}")
@@ -1569,14 +1878,22 @@ class MainController(QObject):
     # 搜索功能
     # ========================================================================
     
-    def show_find_dialog(self) -> None:
-        """显示查找对话框"""
+    def _ensure_find_replace_dialog(self) -> None:
+        """确保查找替换对话框已创建并连接信号"""
+        if not self._find_replace_dialog:
+            self._find_replace_dialog = FindReplaceDialog(self._main_window)
+            self._find_replace_dialog.find_requested.connect(self._on_find_requested)
+            self._find_replace_dialog.replace_requested.connect(self._on_replace_requested)
+            self._find_replace_dialog.replace_all_requested.connect(self._on_replace_all_requested)
+
+    def _show_find_replace_dialog(self, tab_index: int = 0) -> None:
+        """显示查找替换对话框的通用方法"""
         try:
-            if not self._find_replace_dialog:
-                self._find_replace_dialog = FindReplaceDialog(self._main_window)
-                self._find_replace_dialog.find_requested.connect(self._on_find_requested)
-                self._find_replace_dialog.replace_requested.connect(self._on_replace_requested)
-                self._find_replace_dialog.replace_all_requested.connect(self._on_replace_all_requested)
+            self._ensure_find_replace_dialog()
+
+            # 切换到指定标签页
+            if hasattr(self._find_replace_dialog, 'tab_widget'):
+                self._find_replace_dialog.tab_widget.setCurrentIndex(tab_index)
 
             # 设置当前选中的文本
             if self._main_window and self._main_window.editor_widget:
@@ -1589,34 +1906,17 @@ class MainController(QObject):
             self._find_replace_dialog.activateWindow()
 
         except Exception as e:
-            logger.error(f"显示查找对话框失败: {e}")
-            self._show_error("查找对话框", f"无法显示查找对话框: {e}")
+            operation = "替换对话框" if tab_index == 1 else "查找对话框"
+            logger.error(f"显示{operation}失败: {e}")
+            self._show_error(operation, f"无法显示{operation}: {e}")
+
+    def show_find_dialog(self) -> None:
+        """显示查找对话框"""
+        self._show_find_replace_dialog(tab_index=0)
 
     def show_replace_dialog(self) -> None:
         """显示替换对话框"""
-        try:
-            if not self._find_replace_dialog:
-                self._find_replace_dialog = FindReplaceDialog(self._main_window)
-                self._find_replace_dialog.find_requested.connect(self._on_find_requested)
-                self._find_replace_dialog.replace_requested.connect(self._on_replace_requested)
-                self._find_replace_dialog.replace_all_requested.connect(self._on_replace_all_requested)
-
-            # 切换到替换标签页
-            self._find_replace_dialog.tab_widget.setCurrentIndex(1)
-
-            # 设置当前选中的文本
-            if self._main_window and self._main_window.editor_widget:
-                selected_text = self._main_window.editor_widget.get_selected_text()
-                if selected_text:
-                    self._find_replace_dialog.set_search_text(selected_text)
-
-            self._find_replace_dialog.show()
-            self._find_replace_dialog.raise_()
-            self._find_replace_dialog.activateWindow()
-
-        except Exception as e:
-            logger.error(f"显示替换对话框失败: {e}")
-            self._show_error("替换对话框", f"无法显示替换对话框: {e}")
+        self._show_find_replace_dialog(tab_index=1)
     
     # ========================================================================
     # 工具功能
@@ -2030,22 +2330,7 @@ class MainController(QObject):
 
     def show_find_replace(self) -> None:
         """显示查找替换对话框"""
-        try:
-            if not self._find_replace_dialog:
-                self._find_replace_dialog = FindReplaceDialog(self._main_window)
-
-                # 连接信号
-                self._find_replace_dialog.find_requested.connect(self._on_find_requested)
-                self._find_replace_dialog.replace_requested.connect(self._on_replace_requested)
-                self._find_replace_dialog.replace_all_requested.connect(self._on_replace_all_requested)
-
-            self._find_replace_dialog.show()
-            self._find_replace_dialog.raise_()
-            self._find_replace_dialog.activateWindow()
-
-        except Exception as e:
-            logger.error(f"显示查找替换对话框失败: {e}")
-            self._show_error("查找替换", f"无法显示查找替换对话框: {e}")
+        self._show_find_replace_dialog(tab_index=0)
 
 
 
@@ -2391,10 +2676,24 @@ class MainController(QObject):
 
     def _run_async_open_document(self, document_id: str):
         """运行异步打开文档操作"""
+        def success_callback(document):
+            try:
+                self._on_document_opened_success(document, document_id)
+            finally:
+                # 清理打开状态
+                self._opening_documents.discard(document_id)
+
+        def error_callback(e):
+            try:
+                self._show_error("打开文档失败", str(e))
+            finally:
+                # 清理打开状态
+                self._opening_documents.discard(document_id)
+
         self._run_async_task(
             self._open_document_async(document_id),
-            success_callback=lambda document: self._on_document_opened_success(document, document_id),
-            error_callback=lambda e: self._show_error("打开文档失败", str(e))
+            success_callback=success_callback,
+            error_callback=error_callback
         )
 
     def _on_document_opened_success(self, document, document_id: str):
@@ -2414,8 +2713,12 @@ class MainController(QObject):
                 # 在主线程中安全地加载文档到编辑器
                 self._main_window.editor_widget.load_document(document)
                 logger.info(f"文档打开成功: {document_id}")
+            elif document:
+                logger.warning(f"文档打开成功但主窗口不可用: {document_id}")
             else:
-                logger.warning(f"文档打开成功但无法加载到编辑器: {document_id}")
+                # 文档为None，说明文档不存在，但不需要重复警告
+                # 因为document_service已经记录了警告
+                logger.debug(f"文档打开失败，文档不存在: {document_id}")
         except Exception as e:
             logger.error(f"文档打开成功回调失败: {e}")
             import traceback
@@ -2591,25 +2894,7 @@ class MainController(QObject):
     # 工具功能方法
     # ========================================================================
 
-    def word_count(self) -> None:
-        """字数统计"""
-        try:
-            # 使用专门的字数统计对话框
-            if not hasattr(self, '_word_count_dialog') or not self._word_count_dialog:
-                from src.presentation.dialogs.word_count_dialog import WordCountDialog
-                self._word_count_dialog = WordCountDialog(
-                    self.project_service,
-                    self.document_service,
-                    self._main_window
-                )
 
-            self._word_count_dialog.show()
-            self._word_count_dialog.raise_()
-            self._word_count_dialog.activateWindow()
-
-        except Exception as e:
-            logger.error(f"字数统计失败: {e}")
-            self._show_error("错误", f"字数统计失败: {e}")
 
     def backup_management(self) -> None:
         """备份管理"""
@@ -2699,12 +2984,7 @@ class MainController(QObject):
             error_callback=lambda e: self._show_error("新建文档失败", str(e))
         )
 
-    def _on_document_opened_success(self, document, document_id: str):
-        """文档打开成功回调"""
-        if document:
-            logger.info(f"文档打开成功: {document.title}")
-        else:
-            logger.warning(f"文档打开失败: {document_id}")
+    # 重复的方法已删除，使用第一个更完整的版本
 
     def _on_project_creation_finished(self, project):
         """项目创建完成回调"""
@@ -2747,7 +3027,16 @@ class MainController(QObject):
     def _on_document_created(self, event: DocumentCreatedEvent) -> None:
         """处理文档创建事件"""
         try:
-            logger.info(f"🎯 收到文档创建事件: {event.document_title} ({event.document_type.value})")
+            logger.info(f"🎯 收到文档创建事件: {event.document_title} ({event.document_type.value}) - 文档ID: {event.document_id}")
+
+            # 检查是否是重复事件
+            if hasattr(self, '_processed_document_events'):
+                if event.document_id in self._processed_document_events:
+                    logger.warning(f"⚠️ 重复的文档创建事件，跳过处理: {event.document_title} ({event.document_id})")
+                    return
+                self._processed_document_events.add(event.document_id)
+            else:
+                self._processed_document_events = {event.document_id}
 
             # 立即刷新项目树以显示新文档
             self._refresh_project_tree_for_new_document(event)
@@ -2835,9 +3124,25 @@ class MainController(QObject):
             # 清除文档仓储中的缓存
             if hasattr(self.document_service, 'document_repository'):
                 repo = self.document_service.document_repository
+
+                # 清除旧的缓存（向后兼容）
                 if hasattr(repo, '_project_docs_cache'):
                     repo._project_docs_cache.clear()
-                    logger.debug("✅ 文档缓存已清除")
+                    logger.debug("✅ 旧版文档缓存已清除")
+
+                # 清除新的统一缓存管理器
+                if hasattr(repo, '_cache_manager'):
+                    # 清除所有项目文档缓存
+                    cache_manager = repo._cache_manager
+                    cache_prefix = getattr(repo, '_cache_prefix', 'file_document_repo')
+
+                    # 清除所有以项目文档前缀开头的缓存
+                    if hasattr(cache_manager, 'clear_by_pattern'):
+                        cache_manager.clear_by_pattern(f"{cache_prefix}:project_docs:*")
+                        logger.debug("✅ 统一缓存管理器中的项目文档缓存已清除")
+                    elif hasattr(cache_manager, 'clear'):
+                        cache_manager.clear()
+                        logger.debug("✅ 统一缓存管理器已完全清除")
 
         except Exception as e:
             logger.debug(f"清除文档缓存失败: {e}")

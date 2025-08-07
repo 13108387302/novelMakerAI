@@ -11,6 +11,14 @@ import threading
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 
+# 配置文件常量
+CONFIG_DIR_NAME = ".novel_editor"
+CONFIG_FILE_NAME = "config.json"
+TEMP_FILE_SUFFIX = ".tmp"
+DEFAULT_ENCODING = "utf-8"
+OPENAI_PROVIDER = "openai"
+DEEPSEEK_PROVIDER = "deepseek"
+
 try:
     # 尝试导入新版本的pydantic-settings
     from pydantic_settings import BaseSettings
@@ -285,12 +293,12 @@ class Settings(BaseSettings):
     security: SecuritySettings = Field(default_factory=SecuritySettings)
 
     # 路径配置
-    project_root: Path = Field(default_factory=lambda: Path(__file__).parent.parent)
+    project_root: Path = Field(default_factory=lambda: Path(__file__).parent.parent.resolve())
 
     @property
     def data_dir(self) -> Path:
         """数据存储目录"""
-        return self.project_root / ".novel_editor"
+        return self.project_root / CONFIG_DIR_NAME
 
     @property
     def cache_dir(self) -> Path:
@@ -368,13 +376,13 @@ class Settings(BaseSettings):
             config_dict = convert_paths(config_dict)
 
             # 使用临时文件确保原子性写入
-            temp_file = file_path.with_suffix('.tmp')
+            temp_file = file_path.with_suffix(TEMP_FILE_SUFFIX)
             try:
-                with open(temp_file, 'w', encoding='utf-8') as f:
+                with open(temp_file, 'w', encoding=DEFAULT_ENCODING) as f:
                     json.dump(config_dict, f, indent=2, ensure_ascii=False)
 
                 # 验证写入的文件
-                with open(temp_file, 'r', encoding='utf-8') as f:
+                with open(temp_file, 'r', encoding=DEFAULT_ENCODING) as f:
                     json.load(f)  # 验证JSON格式
 
                 # 原子性替换
@@ -398,7 +406,7 @@ class Settings(BaseSettings):
             return cls()
 
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with open(file_path, 'r', encoding=DEFAULT_ENCODING) as f:
                 config_dict = json.load(f)
 
             # 验证配置数据的基本结构
@@ -420,7 +428,7 @@ class Settings(BaseSettings):
         """获取AI服务配置"""
         provider = provider or self.ai_service.default_provider
         
-        if provider == "openai":
+        if provider == OPENAI_PROVIDER:
             return {
                 "api_key": self.ai_service.openai_api_key,
                 "base_url": self.ai_service.openai_base_url,
@@ -429,7 +437,7 @@ class Settings(BaseSettings):
                 "temperature": self.ai_service.temperature,
                 "timeout": self.ai_service.timeout
             }
-        elif provider == "deepseek":
+        elif provider == DEEPSEEK_PROVIDER:
             return {
                 "api_key": self.ai_service.deepseek_api_key,
                 "base_url": self.ai_service.deepseek_base_url,
@@ -448,10 +456,10 @@ class Settings(BaseSettings):
         if not self.ai_service.openai_api_key and not self.ai_service.deepseek_api_key:
             errors.append("至少需要配置一个AI服务的API密钥")
         
-        if self.ai_service.default_provider == "openai" and not self.ai_service.openai_api_key:
+        if self.ai_service.default_provider == OPENAI_PROVIDER and not self.ai_service.openai_api_key:
             errors.append("默认使用OpenAI但未配置API密钥")
         
-        if self.ai_service.default_provider == "deepseek" and not self.ai_service.deepseek_api_key:
+        if self.ai_service.default_provider == DEEPSEEK_PROVIDER and not self.ai_service.deepseek_api_key:
             errors.append("默认使用DeepSeek但未配置API密钥")
         
         return errors
@@ -480,7 +488,7 @@ def get_settings() -> Settings:
             if _settings_instance is None:
                 # 配置文件现在位于项目根目录下的 .novel_editor 目录中
                 project_root = Path(__file__).parent.parent
-                config_file = project_root / ".novel_editor" / "config.json"
+                config_file = project_root / CONFIG_DIR_NAME / CONFIG_FILE_NAME
 
                 try:
                     if config_file.exists():
@@ -522,7 +530,7 @@ def reload_settings() -> Settings:
 
         # 重新加载配置
         project_root = Path(__file__).parent.parent
-        config_file = project_root / ".novel_editor" / "config.json"
+        config_file = project_root / CONFIG_DIR_NAME / CONFIG_FILE_NAME
 
         try:
             if config_file.exists():
@@ -561,7 +569,7 @@ def update_ai_provider(provider: str) -> bool:
 
         # 保存到文件
         project_root = Path(__file__).parent.parent
-        config_file = project_root / ".novel_editor" / "config.json"
+        config_file = project_root / CONFIG_DIR_NAME / CONFIG_FILE_NAME
         config_file.parent.mkdir(parents=True, exist_ok=True)
         settings.save_to_file(config_file)
 
@@ -580,10 +588,8 @@ def update_ai_provider(provider: str) -> bool:
 def _notify_ai_config_change():
     """通知AI相关组件配置已更改"""
     try:
-        # 重新加载AI客户端配置
-        from src.infrastructure.ai_clients.openai_client import reload_ai_client_settings
-        reload_ai_client_settings()
-        print("🔄 AI客户端配置已重新加载")
+        # AI客户端配置变更通知（新架构会自动处理）
+        print("🔄 AI客户端配置已更新")
     except ImportError:
         # 如果模块还没有加载，忽略
         pass

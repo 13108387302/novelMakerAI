@@ -12,6 +12,19 @@ from enum import Enum
 from typing import Dict, List, Optional, Set, Any, Union
 from uuid import uuid4
 
+from src.shared.constants import (
+    MAX_DOCUMENT_WORD_COUNT, MIN_WORD_COUNT_FOR_ANALYSIS,
+    DOCUMENT_TYPES
+)
+
+# 文档实体常量
+DEFAULT_DOCUMENT_TITLE = "未命名文档"
+COPY_SUFFIX = " - 副本"
+READING_SPEED_WPM = 250.0  # 每分钟阅读字数
+MAX_TITLE_LENGTH = 200
+MAX_CONTENT_LENGTH = MAX_DOCUMENT_WORD_COUNT
+DEFAULT_OUTLINE_STRUCTURE = "三幕式"
+
 # 简化验证结果类，避免外部依赖
 class ValidationResult:
     """验证结果"""
@@ -159,8 +172,8 @@ class DocumentStatistics:
         self.word_count = len(content.split())
         self.paragraph_count = len([p for p in content.split('\n\n') if p.strip()])
         self.sentence_count = len([s for s in content.split('.') if s.strip()])
-        # 估算阅读时间（每分钟250字）
-        self.reading_time_minutes = self.word_count / 250.0
+        # 估算阅读时间
+        self.reading_time_minutes = self.word_count / READING_SPEED_WPM
 
 
 @dataclass
@@ -209,7 +222,7 @@ class Document:
         self.project_id = project_id
 
         # 元数据
-        self.metadata = DocumentMetadata(title=title or "未命名文档")
+        self.metadata = DocumentMetadata(title=title or DEFAULT_DOCUMENT_TITLE)
 
         # 统计信息
         self.statistics = DocumentStatistics()
@@ -223,6 +236,16 @@ class Document:
 
         # 应用类型配置
         self._apply_type_config(**kwargs)
+
+    @property
+    def document_type(self) -> DocumentType:
+        """文档类型（兼容性属性）"""
+        return self.type
+
+    @document_type.setter
+    def document_type(self, value: DocumentType):
+        """设置文档类型（兼容性属性）"""
+        self.type = value
     
     @classmethod
     def _init_type_configs(cls):
@@ -270,7 +293,7 @@ class Document:
             optional_fields=["outline_level", "structure_type", "plot_points"],
             default_values={
                 "outline_level": 1,
-                "structure_type": "三幕式",
+                "structure_type": DEFAULT_OUTLINE_STRUCTURE,
                 "plot_points": []
             }
         )
@@ -329,11 +352,11 @@ class Document:
         if not self.metadata.title.strip():
             result.add_error("文档标题不能为空")
         
-        if len(self.metadata.title) > 200:
-            result.add_error("文档标题过长（最多200字符）")
-        
-        if len(self.content) > 1000000:  # 100万字符
-            result.add_error("文档内容过长（最多100万字符）")
+        if len(self.metadata.title) > MAX_TITLE_LENGTH:
+            result.add_error(f"文档标题过长（最多{MAX_TITLE_LENGTH}字符）")
+
+        if len(self.content) > MAX_CONTENT_LENGTH:
+            result.add_error(f"文档内容过长（最多{MAX_CONTENT_LENGTH}字符）")
         
         # 类型特定验证
         config = self._type_configs.get(self.type)
@@ -443,7 +466,7 @@ class Document:
         """创建副本"""
         data = self.to_dict()
         data["id"] = str(uuid4())
-        data["metadata"]["title"] = f"{self.metadata.title} - 副本"
+        data["metadata"]["title"] = f"{self.metadata.title}{COPY_SUFFIX}"
         data["metadata"]["created_at"] = datetime.now().isoformat()
         data["metadata"]["updated_at"] = datetime.now().isoformat()
         return Document.from_dict(data)

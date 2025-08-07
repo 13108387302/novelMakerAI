@@ -17,8 +17,24 @@ from src.domain.ai.entities.ai_request import AIRequest
 from src.domain.ai.entities.ai_response import AIResponse, AIResponseStatus
 from src.domain.ai.value_objects.ai_capability import AICapability
 from src.domain.ai.value_objects.ai_request_type import AIRequestType
+from src.shared.constants import (
+    AI_TIMEOUT_SECONDS, AI_MAX_TOKENS, AI_TEMPERATURE
+)
 
 logger = logging.getLogger(__name__)
+
+# OpenAI客户端常量
+DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1'
+DEFAULT_OPENAI_MODEL = 'gpt-3.5-turbo'
+DEFAULT_MAX_TOKENS = AI_MAX_TOKENS
+DEFAULT_TEMPERATURE = AI_TEMPERATURE
+SYSTEM_ROLE = "system"
+USER_ROLE = "user"
+TEST_MAX_TOKENS = 1
+CONNECTION_TIMEOUT = AI_TIMEOUT_SECONDS
+API_KEY_ERROR_MSG = "OpenAI API密钥未配置"
+CLIENT_NOT_CONNECTED_MSG = "OpenAI客户端未连接"
+CLIENT_NOT_INITIALIZED_MSG = "客户端未初始化"
 
 
 class OpenAIClient(BaseAIClient):
@@ -39,10 +55,10 @@ class OpenAIClient(BaseAIClient):
         
         # OpenAI配置
         self.api_key = config.get('api_key', '')
-        self.base_url = config.get('base_url', 'https://api.openai.com/v1')
-        self.default_model = config.get('default_model', 'gpt-3.5-turbo')
-        self.max_tokens = config.get('max_tokens', 2000)
-        self.temperature = config.get('temperature', 0.7)
+        self.base_url = config.get('base_url', DEFAULT_OPENAI_BASE_URL)
+        self.default_model = config.get('default_model', DEFAULT_OPENAI_MODEL)
+        self.max_tokens = config.get('max_tokens', DEFAULT_MAX_TOKENS)
+        self.temperature = config.get('temperature', DEFAULT_TEMPERATURE)
         
         # 客户端实例
         self.client: Optional[AsyncOpenAI] = None
@@ -70,7 +86,7 @@ class OpenAIClient(BaseAIClient):
         """
         try:
             if not self.api_key:
-                raise ValueError("OpenAI API密钥未配置")
+                raise ValueError(API_KEY_ERROR_MSG)
             
             # 创建异步客户端
             self.client = AsyncOpenAI(
@@ -144,7 +160,7 @@ class OpenAIClient(BaseAIClient):
             AIResponse: AI响应
         """
         if not self.client:
-            raise RuntimeError("OpenAI客户端未连接")
+            raise RuntimeError(CLIENT_NOT_CONNECTED_MSG)
         
         try:
             # 构建消息
@@ -200,7 +216,7 @@ class OpenAIClient(BaseAIClient):
             str: 文本块
         """
         if not self.client:
-            raise RuntimeError("OpenAI客户端未连接")
+            raise RuntimeError(CLIENT_NOT_CONNECTED_MSG)
         
         try:
             # 构建消息
@@ -244,13 +260,13 @@ class OpenAIClient(BaseAIClient):
         # 添加系统消息（如果有上下文）
         if request.context:
             messages.append({
-                "role": "system",
+                "role": SYSTEM_ROLE,
                 "content": f"上下文信息：\n{request.context}"
             })
         
         # 添加用户消息
         messages.append({
-            "role": "user", 
+            "role": USER_ROLE,
             "content": request.prompt
         })
         
@@ -259,12 +275,12 @@ class OpenAIClient(BaseAIClient):
     async def _test_connection(self) -> None:
         """测试连接"""
         if not self.client:
-            raise RuntimeError("客户端未初始化")
+            raise RuntimeError(CLIENT_NOT_INITIALIZED_MSG)
         
         # 发送简单的测试请求
         await self.client.chat.completions.create(
             model=self.default_model,
-            messages=[{"role": "user", "content": "test"}],
-            max_tokens=1,
-            timeout=5.0
+            messages=[{"role": USER_ROLE, "content": "test"}],
+            max_tokens=TEST_MAX_TOKENS,
+            timeout=CONNECTION_TIMEOUT
         )

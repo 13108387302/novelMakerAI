@@ -42,8 +42,9 @@ class AIServiceRepository(IAIServiceRepository):
     def _get_client_manager(self):
         """获取AI客户端管理器（单例）"""
         if self._client_manager is None:
-            from src.infrastructure.ai_clients.openai_client import AIClientManager
-            self._client_manager = AIClientManager()
+            # 使用新架构的AI客户端工厂
+            from src.infrastructure.ai.clients.ai_client_factory import AIClientFactory
+            self._client_manager = AIClientFactory()
         return self._client_manager
 
     def _get_cache_key(self, prompt: str, context: str, **kwargs) -> str:

@@ -9,15 +9,37 @@
 import json
 import re
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, AsyncGenerator
 from datetime import datetime
+import asyncio
 
 from src.domain.entities.document import Document, DocumentType, DocumentStatus, create_document
 from src.domain.repositories.document_repository import IDocumentRepository
 from src.shared.utils.logger import get_logger
 from src.shared.utils.cache_manager import get_cache_manager
+from src.shared.constants import (
+    ENCODING_FORMATS, CACHE_EXPIRE_SECONDS, VERSION_KEEP_COUNT
+)
 
 logger = get_logger(__name__)
+
+# 文档仓储常量
+DEFAULT_DOCUMENTS_DIR = ".novel_editor/documents"
+DOCUMENT_METADATA_EXT = ".json"
+DOCUMENT_CONTENT_SUFFIX = "_content.txt"
+TEMP_FILE_EXT = ".tmp"
+VERSION_FILE_PREFIX = "_v"
+VERSION_META_SUFFIX = ".meta.json"
+DEFAULT_ENCODING = ENCODING_FORMATS['utf8']
+FALLBACK_ENCODING = ENCODING_FORMATS['gbk']
+CACHE_PREFIX = "doc_repo"
+SHORT_CACHE_TTL = 60  # 1分钟
+LONG_CACHE_TTL = CACHE_EXPIRE_SECONDS  # 5分钟
+DEFAULT_VERSION_KEEP_COUNT = VERSION_KEEP_COUNT
+DEFAULT_CHUNK_SIZE = 8192
+DEFAULT_LINE_COUNT = 1000
+CONTEXT_LINES = 2  # 搜索上下文行数
+ASYNC_SLEEP_MS = 0.001  # 异步睡眠时间
 
 
 class FileDocumentRepository(IDocumentRepository):
@@ -45,14 +67,14 @@ class FileDocumentRepository(IDocumentRepository):
         Args:
             base_path: 文档存储的基础路径，默认为用户目录下的.novel_editor/documents
         """
-        self.base_path = base_path or Path.home() / ".novel_editor" / "documents"
+        self.base_path = base_path or Path.home() / DEFAULT_DOCUMENTS_DIR
         self.base_path.mkdir(parents=True, exist_ok=True)
 
         # 使用统一的缓存管理器
         self._cache_manager = get_cache_manager()
 
         # 缓存键前缀
-        self._cache_prefix = "doc_repo"
+        self._cache_prefix = CACHE_PREFIX
 
     def _get_document_path(self, document_id: str) -> Path:
         """
@@ -64,7 +86,7 @@ class FileDocumentRepository(IDocumentRepository):
         Returns:
             Path: 文档元数据文件路径
         """
-        return self.base_path / f"{document_id}.json"
+        return self.base_path / f"{document_id}{DOCUMENT_METADATA_EXT}"
 
     def _get_content_path(self, document_id: str) -> Path:
         """
@@ -76,7 +98,7 @@ class FileDocumentRepository(IDocumentRepository):
         Returns:
             Path: 文档内容文件路径
         """
-        return self.base_path / f"{document_id}_content.txt"
+        return self.base_path / f"{document_id}{DOCUMENT_CONTENT_SUFFIX}"
 
     async def _find_document_in_projects(self, document_id: str) -> tuple[Optional[Path], Optional[Path]]:
         """在所有项目目录中查找文档（带缓存优化）"""
@@ -96,34 +118,20 @@ class FileDocumentRepository(IDocumentRepository):
             from config.settings import get_settings
             settings = get_settings()
 
-            # 检查项目索引
-            projects_dir = settings.data_dir / "projects"
-            index_file = projects_dir / "projects_index.json"
+            # 在编辑器目录的项目子目录中查找
+            for project_subdir in self.base_path.glob("project_*"):
+                if project_subdir.is_dir():
+                    doc_path = project_subdir / f"{document_id}.json"
+                    content_path = project_subdir / f"{document_id}_content.txt"
 
-            if index_file.exists():
-                import json
-                with open(index_file, 'r', encoding='utf-8') as f:
-                    index = json.load(f)
+                    if doc_path.exists():
+                        logger.debug(f"🔍 在项目目录 {project_subdir.name} 中找到文档: {doc_path}")
 
-                # 在每个项目的documents目录中查找
-                for project_id, project_info in index.items():
-                    project_path_str = project_info.get('path')
-                    if project_path_str:
-                        project_path = Path(project_path_str)
-                        docs_dir = project_path / "documents"
+                        # 缓存结果到统一缓存管理器
+                        cache_key = f"{self._cache_prefix}:doc_paths:{document_id}"
+                        self._cache_manager.set(cache_key, (doc_path, content_path), ttl=LONG_CACHE_TTL)
 
-                        if docs_dir.exists():
-                            doc_path = docs_dir / f"{document_id}.json"
-                            content_path = docs_dir / f"{document_id}_content.txt"
-
-                            if doc_path.exists():
-                                logger.debug(f"🔍 在项目 {project_id} 中找到文档: {doc_path}")
-
-                                # 缓存结果到统一缓存管理器
-                                cache_key = f"{self._cache_prefix}:doc_paths:{document_id}"
-                                self._cache_manager.set(cache_key, (doc_path, content_path), ttl=300)
-
-                                return doc_path, content_path
+                        return doc_path, content_path
 
             return None, None
 
@@ -135,90 +143,18 @@ class FileDocumentRepository(IDocumentRepository):
         """获取文档保存路径"""
         logger.debug(f"获取文档保存路径，项目ID: {document.project_id}")
 
-        # 如果文档有项目ID，尝试在项目目录下保存
+        # 如果文档有项目ID，优先保存到编辑器目录的项目子目录
         if document.project_id:
-            try:
-                # 方法1: 检查全局索引
-                from config.settings import get_settings
-                settings = get_settings()
+            # 使用编辑器目录下的项目子目录（确保文档能被正确索引和加载）
+            project_subdir = self.base_path / f"project_{document.project_id}"
+            project_subdir.mkdir(parents=True, exist_ok=True)
+            logger.info(f"文档将保存到编辑器项目目录: {project_subdir}")
+            return project_subdir
 
-                # 确保projects目录存在
-                projects_dir = settings.data_dir / "projects"
-                projects_dir.mkdir(parents=True, exist_ok=True)
-
-                index_file = projects_dir / "projects_index.json"
-                logger.debug(f"检查索引文件: {index_file}")
-
-                if index_file.exists():
-                    import json
-                    with open(index_file, 'r', encoding='utf-8') as f:
-                        index = json.load(f)
-
-                    logger.debug(f"索引中的项目数量: {len(index)}")
-                    project_info = index.get(document.project_id)
-
-                    if project_info:
-                        logger.debug(f"找到项目信息: {project_info}")
-
-                        # 尝试获取项目路径，支持多种字段名
-                        project_path_str = project_info.get('path') or project_info.get('file_path')
-
-                        # 如果是file_path，需要获取其父目录
-                        if project_path_str:
-                            project_path = Path(project_path_str)
-
-                            # 如果是file_path（指向JSON文件），获取其父目录
-                            if project_path_str == project_info.get('file_path') and project_path.suffix == '.json':
-                                # 这是一个JSON文件路径，不是项目目录路径
-                                # 对于这种情况，我们使用默认路径
-                                logger.debug(f"项目存储为JSON文件: {project_path}，使用默认文档路径")
-                            else:
-                                # 这是一个项目目录路径
-                                logger.debug(f"项目路径: {project_path}")
-
-                                if project_path.exists():
-                                    # 在项目目录下创建documents子目录
-                                    documents_path = project_path / "documents"
-                                    documents_path.mkdir(parents=True, exist_ok=True)
-                                    logger.info(f"文档将保存到项目目录: {documents_path}")
-                                    return documents_path
-                                else:
-                                    logger.debug(f"项目路径不存在: {project_path}")
-
-                            # 检查是否有 'path' 字段（项目目录路径）
-                            if 'path' in project_info and project_info['path']:
-                                project_dir_path = Path(project_info['path'])
-                                if project_dir_path.exists():
-                                    documents_path = project_dir_path / "documents"
-                                    documents_path.mkdir(parents=True, exist_ok=True)
-                                    logger.info(f"文档将保存到项目目录: {documents_path}")
-                                    return documents_path
-                        else:
-                            logger.warning(f"项目信息中没有路径字段")
-                    else:
-                        logger.warning(f"索引中未找到项目: {document.project_id}")
-                else:
-                    logger.warning(f"索引文件不存在: {index_file}")
-
-                # 方法2: 在默认项目目录中查找
-                default_project_path = projects_dir / document.project_id
-                logger.debug(f"尝试默认项目路径: {default_project_path}")
-
-                if default_project_path.exists():
-                    documents_path = default_project_path / "documents"
-                    documents_path.mkdir(parents=True, exist_ok=True)
-                    logger.info(f"文档将保存到默认项目目录: {documents_path}")
-                    return documents_path
-
-            except Exception as e:
-                logger.error(f"获取项目路径失败: {e}")
-                import traceback
-                logger.error(traceback.format_exc())
-
-        # 使用默认路径
-        logger.info(f"使用默认文档目录: {self.base_path}")
-        logger.debug(f"项目 {document.project_id} 的文档将保存到默认位置，这是正常的")
-        return self.base_path
+        else:
+            # 没有项目ID的文档保存到默认目录
+            logger.info(f"使用默认文档目录: {self.base_path}")
+            return self.base_path
     
     async def save(self, document: Document) -> bool:
         """保存文档（带缓存清理）"""
@@ -227,11 +163,19 @@ class FileDocumentRepository(IDocumentRepository):
         try:
             # 确定保存路径
             save_path = await self._get_document_save_path(document)
+            logger.info(f"💾 文档保存路径: {save_path}")
+            logger.info(f"📋 文档项目ID: {document.project_id}")
 
             # 保存文档元数据
             doc_path = save_path / f"{document.id}.json"
             doc_temp_file = doc_path.with_suffix('.tmp')
             doc_data = document.to_dict()
+
+            # 验证项目ID是否正确保存
+            if doc_data.get('project_id') != document.project_id:
+                logger.error(f"❌ 文档数据中的项目ID不匹配: 期望 {document.project_id}, 实际 {doc_data.get('project_id')}")
+            else:
+                logger.debug(f"✅ 文档项目ID验证通过: {document.project_id}")
 
             # 分离内容和元数据
             content = doc_data.pop('content', '')
@@ -258,9 +202,11 @@ class FileDocumentRepository(IDocumentRepository):
             # 创建版本备份（如果内容有变化）
             if content and len(content.strip()) > 0:
                 try:
-                    version_id = await self.create_version(
+                    # 直接传递文档路径，避免查找问题
+                    version_id = await self._create_version_with_path(
                         document.id,
                         content,
+                        doc_path,
                         f"自动保存版本 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
                     )
                     if version_id:
@@ -388,8 +334,14 @@ class FileDocumentRepository(IDocumentRepository):
     
     async def exists(self, document_id: str) -> bool:
         """检查文档是否存在"""
+        # 首先检查默认路径
         doc_path = self._get_document_path(document_id)
-        return doc_path.exists()
+        if doc_path.exists():
+            return True
+
+        # 如果默认路径不存在，检查项目目录
+        found_paths = await self._find_document_in_projects(document_id)
+        return found_paths is not None
     
     async def list_by_project(self, project_id: str) -> List[Document]:
         """列出项目中的所有文档（性能优化版本）"""
@@ -419,8 +371,13 @@ class FileDocumentRepository(IDocumentRepository):
                 logger.debug(f"🔍 搜索路径: {search_path}")
 
                 # 批量读取文档元数据，避免逐个加载完整文档
-                doc_files = list(search_path.glob("*.json"))
-                logger.debug(f"📄 找到 {len(doc_files)} 个文档文件")
+                # 排除版本元数据文件和其他非文档文件
+                all_json_files = list(search_path.glob("*.json"))
+                doc_files = [
+                    f for f in all_json_files
+                    if not f.name.endswith('.meta.json') and '_v' not in f.stem
+                ]
+                logger.debug(f"📄 找到 {len(all_json_files)} 个JSON文件，其中 {len(doc_files)} 个是文档文件")
 
                 for doc_file in doc_files:
                     try:
@@ -430,7 +387,12 @@ class FileDocumentRepository(IDocumentRepository):
 
                         # 验证文档数据的基本结构
                         if not self._validate_document_data(doc_data, project_id):
-                            continue
+                            # 尝试修复缺少ID的文档数据
+                            if self._try_fix_document_data(doc_data, doc_file, project_id):
+                                logger.info(f"成功修复文档数据: {doc_file.name}")
+                            else:
+                                logger.warning(f"跳过无效的文档文件: {doc_file.name}")
+                                continue
 
                         if doc_data.get('id') not in found_doc_ids:
                             # 创建轻量级文档对象（不加载内容）
@@ -463,56 +425,162 @@ class FileDocumentRepository(IDocumentRepository):
         try:
             paths = []
 
-            # 1. 项目特定路径
-            try:
-                from src.domain.entities.document import Document, DocumentType
-                temp_doc = Document(
-                    title="temp",
-                    document_type=DocumentType.CHAPTER,
-                    project_id=project_id
-                )
-                project_docs_path = await self._get_document_save_path(temp_doc)
-                paths.append(project_docs_path)
-            except Exception as e:
-                logger.debug(f"获取项目特定路径失败: {e}")
+            # 1. 尝试获取项目根路径下的文档目录
+            project_root = await self._get_project_root_path(project_id)
+            if project_root:
+                project_docs_path = project_root / "documents"
+                if project_docs_path.exists():
+                    paths.append(project_docs_path)
+                    logger.debug(f"项目根路径下的文档目录: {project_docs_path}")
+                else:
+                    # 如果没有documents子目录，直接使用项目根目录
+                    paths.append(project_root)
+                    logger.debug(f"项目根路径: {project_root}")
 
-            # 2. 默认文档目录
-            paths.append(self.base_path)
+            # 2. 项目特定路径（通过文档保存路径计算）
+            if not paths:
+                try:
+                    from src.domain.entities.document import Document, DocumentType
+                    temp_doc = Document(
+                        title="temp",
+                        document_type=DocumentType.CHAPTER,
+                        project_id=project_id
+                    )
+                    project_docs_path = await self._get_document_save_path(temp_doc)
+                    paths.append(project_docs_path)
+                    logger.debug(f"计算的项目特定路径: {project_docs_path}")
+                except Exception as e:
+                    logger.debug(f"获取项目特定路径失败: {e}")
 
+            # 3. 搜索默认目录下的项目子目录
+            if not paths:
+                project_subdir = self.base_path / f"project_{project_id}"
+                if project_subdir.exists():
+                    paths.append(project_subdir)
+                    logger.debug(f"使用默认目录下的项目子目录: {project_subdir}")
+                else:
+                    logger.debug(f"项目子目录不存在: {project_subdir}")
+                    # 不再搜索默认目录，避免跨项目共享
+
+            logger.info(f"项目 {project_id} 的文档搜索路径: {[str(p) for p in paths]}")
             return paths
 
         except Exception as e:
             logger.error(f"获取项目文档路径失败: {e}")
             return [self.base_path]
 
+    async def _get_project_root_path(self, project_id: str) -> Optional[Path]:
+        """获取项目根路径"""
+        try:
+            # 尝试从项目仓库直接获取项目信息
+            from src.infrastructure.repositories.file_project_repository import FileProjectRepository
+
+            # 创建临时的项目仓库来查找项目
+            project_repo = FileProjectRepository()
+
+            # 尝试加载项目
+            project = await project_repo.get_by_id(project_id)
+            if project and hasattr(project, 'root_path') and project.root_path:
+                return Path(project.root_path)
+
+            return None
+
+        except Exception as e:
+            logger.debug(f"获取项目根路径失败: {e}")
+            return None
+
     def _validate_document_data(self, doc_data: dict, project_id: str) -> bool:
         """验证文档数据的基本结构"""
         try:
             # 检查基本字段
             if not isinstance(doc_data, dict):
+                logger.debug("文档数据不是字典类型")
                 return False
 
-            # 检查ID
+            # 检查ID - 如果缺少，尝试从文件名推断
             if not doc_data.get('id'):
-                logger.debug("文档数据缺少ID字段")
+                logger.debug("文档数据缺少ID字段，可能是旧版本文件")
                 return False
 
             # 检查项目ID匹配
             doc_project_id = doc_data.get('project_id')
             if doc_project_id != project_id:
                 logger.debug(f"项目ID不匹配: 期望 {project_id}, 实际 {doc_project_id}")
+                # 严格匹配项目ID，避免加载其他项目的文档
                 return False
 
             # 检查文档类型
             doc_type = doc_data.get('type') or doc_data.get('document_type')
             if not doc_type:
-                logger.debug("文档数据缺少类型字段")
-                return False
+                logger.debug("文档数据缺少类型字段，使用默认类型")
+                # 不直接返回False，而是在后续处理中设置默认类型
 
             return True
 
         except Exception as e:
             logger.debug(f"验证文档数据失败: {e}")
+            return False
+
+    def _try_fix_document_data(self, doc_data: dict, doc_file: Path, project_id: str) -> bool:
+        """尝试修复缺少字段的文档数据"""
+        try:
+            fixed = False
+
+            # 修复缺少的ID字段
+            if not doc_data.get('id'):
+                # 从文件名推断ID
+                file_stem = doc_file.stem
+                if file_stem and file_stem != 'document':
+                    doc_data['id'] = file_stem
+                    fixed = True
+                    logger.debug(f"从文件名推断文档ID: {file_stem}")
+                else:
+                    # 生成新的ID
+                    import uuid
+                    doc_data['id'] = str(uuid.uuid4())
+                    fixed = True
+                    logger.debug(f"生成新的文档ID: {doc_data['id']}")
+
+            # 修复缺少的项目ID
+            if not doc_data.get('project_id'):
+                doc_data['project_id'] = project_id
+                fixed = True
+                logger.debug(f"设置文档项目ID: {project_id}")
+
+            # 修复缺少的文档类型
+            if not (doc_data.get('type') or doc_data.get('document_type')):
+                doc_data['type'] = 'chapter'  # 默认类型
+                fixed = True
+                logger.debug("设置默认文档类型: chapter")
+
+            # 修复缺少的元数据
+            if not doc_data.get('metadata'):
+                doc_data['metadata'] = {
+                    'title': doc_data.get('title', '未命名文档'),
+                    'description': '',
+                    'tags': [],
+                    'author': '',
+                    'created_at': datetime.now().isoformat(),
+                    'updated_at': datetime.now().isoformat()
+                }
+                fixed = True
+                logger.debug("添加默认元数据")
+
+            # 如果进行了修复，保存修复后的文件
+            if fixed:
+                try:
+                    import json
+                    with open(doc_file, 'w', encoding='utf-8') as f:
+                        json.dump(doc_data, f, indent=2, ensure_ascii=False)
+                    logger.info(f"已保存修复后的文档数据: {doc_file.name}")
+                except Exception as e:
+                    logger.error(f"保存修复后的文档数据失败: {e}")
+                    return False
+
+            return True
+
+        except Exception as e:
+            logger.error(f"修复文档数据失败: {e}")
             return False
 
     async def _create_lightweight_document(self, doc_data: dict):
@@ -660,12 +728,34 @@ class FileDocumentRepository(IDocumentRepository):
     def clear_all_cache(self) -> None:
         """清理所有缓存"""
         try:
-            # 注意：这里只能清理我们知道的缓存键
-            # 统一缓存管理器的clear()会清理所有缓存，可能影响其他组件
-            logger.debug("✅ 文档仓储缓存已通过统一缓存管理器管理")
+            logger.info("🧹 开始清理文档仓储的所有缓存")
+
+            # 清理旧的缓存（向后兼容）
+            if hasattr(self, '_project_docs_cache'):
+                self._project_docs_cache.clear()
+                logger.debug("✅ 旧版项目文档缓存已清除")
+
+            if hasattr(self, '_document_cache'):
+                self._document_cache.clear()
+                logger.debug("✅ 旧版文档缓存已清除")
+
+            # 清理统一缓存管理器中的文档相关缓存
+            if hasattr(self, '_cache_manager') and self._cache_manager:
+                cache_prefix = getattr(self, '_cache_prefix', 'file_document_repo')
+
+                # 清除所有项目文档缓存
+                if hasattr(self._cache_manager, 'clear_by_pattern'):
+                    self._cache_manager.clear_by_pattern(f"{cache_prefix}:project_docs:*")
+                    self._cache_manager.clear_by_pattern(f"{cache_prefix}:document:*")
+                    logger.info("✅ 统一缓存管理器中的文档缓存已按模式清除")
+                elif hasattr(self._cache_manager, 'clear'):
+                    self._cache_manager.clear()
+                    logger.info("✅ 统一缓存管理器已完全清除")
+
+            logger.info("🎉 文档仓储缓存清理完成")
 
         except Exception as e:
-            logger.debug(f"清理所有缓存失败: {e}")
+            logger.error(f"清理所有缓存失败: {e}")
     
     async def list_by_type(
         self, 
@@ -914,11 +1004,17 @@ class FileDocumentRepository(IDocumentRepository):
     async def cleanup_old_versions(self, document_id: str, keep_count: int = 10) -> bool:
         """清理旧版本"""
         try:
-            # 获取文档的版本目录
+            # 首先尝试默认路径
             doc_path = self._get_document_path(document_id)
+
+            # 如果默认路径不存在，尝试在项目目录中查找
             if not doc_path.exists():
-                logger.warning(f"文档不存在，无法清理版本: {document_id}")
-                return False
+                found_paths = await self._find_document_in_projects(document_id)
+                if found_paths:
+                    doc_path, _ = found_paths
+                else:
+                    logger.warning(f"文档不存在，无法清理版本: {document_id}")
+                    return False
 
             # 版本文件存储在同目录下，以 {document_id}_v{timestamp}.txt 命名
             doc_dir = doc_path.parent
@@ -952,11 +1048,17 @@ class FileDocumentRepository(IDocumentRepository):
     async def delete_version(self, document_id: str, version_id: str) -> bool:
         """删除指定版本"""
         try:
-            # 版本ID格式为时间戳，版本文件名为 {document_id}_v{version_id}.txt
+            # 首先尝试默认路径
             doc_path = self._get_document_path(document_id)
+
+            # 如果默认路径不存在，尝试在项目目录中查找
             if not doc_path.exists():
-                logger.warning(f"文档不存在: {document_id}")
-                return False
+                found_paths = await self._find_document_in_projects(document_id)
+                if found_paths:
+                    doc_path, _ = found_paths
+                else:
+                    logger.warning(f"文档不存在: {document_id}")
+                    return False
 
             doc_dir = doc_path.parent
             version_file = doc_dir / f"{document_id}_v{version_id}.txt"
@@ -973,14 +1075,9 @@ class FileDocumentRepository(IDocumentRepository):
             logger.error(f"删除版本失败: {e}")
             return False
 
-    async def create_version(self, document_id: str, content: str, description: str = "") -> Optional[str]:
-        """创建文档版本"""
+    async def _create_version_with_path(self, document_id: str, content: str, doc_path: Path, description: str = "") -> Optional[str]:
+        """使用指定路径创建文档版本（内部方法）"""
         try:
-            doc_path = self._get_document_path(document_id)
-            if not doc_path.exists():
-                logger.warning(f"文档不存在: {document_id}")
-                return None
-
             # 生成版本ID（使用时间戳）
             version_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]  # 精确到毫秒
 
@@ -998,19 +1095,33 @@ class FileDocumentRepository(IDocumentRepository):
                 "version_id": version_id,
                 "document_id": document_id,
                 "created_at": datetime.now().isoformat(),
-                "description": description,
-                "size": len(content)
+                "description": description
             }
 
             with open(version_meta_file, 'w', encoding='utf-8') as f:
                 json.dump(version_meta, f, indent=2, ensure_ascii=False)
 
-            logger.info(f"创建版本成功: {document_id} 版本 {version_id}")
-
-            # 自动清理旧版本（保留最近20个版本）
-            await self.cleanup_old_versions(document_id, 20)
-
+            logger.debug(f"版本创建成功: {document_id} -> {version_id}")
             return version_id
+
+        except Exception as e:
+            logger.error(f"创建版本失败: {e}")
+            return None
+
+    async def create_version(self, document_id: str, content: str, description: str = "") -> Optional[str]:
+        """创建文档版本"""
+        try:
+            # 首先尝试默认路径
+            doc_path = self._get_document_path(document_id)
+
+            # 如果默认路径不存在，尝试在项目目录中查找
+            if not doc_path.exists():
+                doc_path, _ = await self._find_document_in_projects(document_id)
+                if not doc_path or not doc_path.exists():
+                    logger.warning(f"文档不存在: {document_id}")
+                    return None
+
+            return await self._create_version_with_path(document_id, content, doc_path, description)
 
         except Exception as e:
             logger.error(f"创建版本失败: {e}")
@@ -1160,3 +1271,208 @@ class FileDocumentRepository(IDocumentRepository):
         except Exception as e:
             logger.error(f"恢复版本失败: {e}")
             return False
+
+    async def load_content_streaming(self, document_id: str, chunk_size: int = 8192) -> AsyncGenerator[str, None]:
+        """
+        流式加载文档内容
+
+        分块异步加载大文档内容，避免一次性加载到内存。
+        适用于超大文档的性能优化。
+
+        Args:
+            document_id: 文档ID
+            chunk_size: 每个块的大小（字节）
+
+        Yields:
+            str: 文档内容块
+        """
+        try:
+            # 获取内容文件路径
+            content_path = self._get_content_path(document_id)
+
+            # 如果默认路径不存在，尝试在项目中查找
+            if not content_path.exists():
+                _, content_path = await self._find_document_in_projects(document_id)
+                if not content_path or not content_path.exists():
+                    logger.warning(f"文档内容文件不存在: {document_id}")
+                    return
+
+            logger.info(f"开始流式加载文档内容: {document_id}, 块大小: {chunk_size}")
+
+            # 流式读取文件
+            with open(content_path, 'r', encoding='utf-8') as f:
+                chunk_count = 0
+                while True:
+                    chunk = f.read(chunk_size)
+                    if not chunk:
+                        break
+
+                    chunk_count += 1
+                    logger.debug(f"流式加载块 {chunk_count}: {len(chunk)} 字符")
+
+                    yield chunk
+
+                    # 让出控制权，避免阻塞UI
+                    await asyncio.sleep(0.001)  # 1ms延迟
+
+            logger.info(f"流式加载完成: {document_id}, 总块数: {chunk_count}")
+
+        except UnicodeDecodeError as e:
+            logger.warning(f"文档编码错误，尝试其他编码: {e}")
+            # 尝试GBK编码
+            try:
+                with open(content_path, 'r', encoding='gbk') as f:
+                    while True:
+                        chunk = f.read(chunk_size)
+                        if not chunk:
+                            break
+                        yield chunk
+                        await asyncio.sleep(0.001)
+            except Exception as fallback_error:
+                logger.error(f"流式加载失败（编码问题）: {fallback_error}")
+                return
+
+        except Exception as e:
+            logger.error(f"流式加载文档内容失败: {e}")
+            return
+
+    async def load_content_by_lines(self, document_id: str, start_line: int = 0, line_count: int = 1000) -> Optional[List[str]]:
+        """
+        按行加载文档内容
+
+        加载指定行范围的文档内容，用于虚拟化渲染。
+
+        Args:
+            document_id: 文档ID
+            start_line: 起始行号（从0开始）
+            line_count: 要加载的行数
+
+        Returns:
+            List[str]: 指定范围的文档行，如果失败返回None
+        """
+        try:
+            # 获取内容文件路径
+            content_path = self._get_content_path(document_id)
+
+            if not content_path.exists():
+                _, content_path = await self._find_document_in_projects(document_id)
+                if not content_path or not content_path.exists():
+                    logger.warning(f"文档内容文件不存在: {document_id}")
+                    return None
+
+            logger.debug(f"按行加载文档内容: {document_id}, 行{start_line}-{start_line + line_count}")
+
+            # 读取指定行范围
+            lines = []
+            with open(content_path, 'r', encoding='utf-8') as f:
+                # 跳过前面的行
+                for _ in range(start_line):
+                    try:
+                        f.readline()
+                    except StopIteration:
+                        break
+
+                # 读取指定数量的行
+                for _ in range(line_count):
+                    try:
+                        line = f.readline()
+                        if not line:  # 文件结束
+                            break
+                        lines.append(line.rstrip('\n\r'))
+                    except StopIteration:
+                        break
+
+            logger.debug(f"按行加载完成: {len(lines)} 行")
+            return lines
+
+        except UnicodeDecodeError as e:
+            logger.warning(f"文档编码错误，尝试GBK编码: {e}")
+            try:
+                lines = []
+                with open(content_path, 'r', encoding='gbk') as f:
+                    for _ in range(start_line):
+                        try:
+                            f.readline()
+                        except StopIteration:
+                            break
+
+                    for _ in range(line_count):
+                        try:
+                            line = f.readline()
+                            if not line:
+                                break
+                            lines.append(line.rstrip('\n\r'))
+                        except StopIteration:
+                            break
+
+                return lines
+
+            except Exception as fallback_error:
+                logger.error(f"按行加载失败（编码问题）: {fallback_error}")
+                return None
+
+        except Exception as e:
+            logger.error(f"按行加载文档内容失败: {e}")
+            return None
+
+    async def load_metadata_only(self, document_id: str) -> Optional[Document]:
+        """
+        只加载文档元数据，不加载内容
+
+        用于快速获取文档信息而不加载大量内容到内存。
+
+        Args:
+            document_id: 文档ID
+
+        Returns:
+            Document: 只包含元数据的文档对象，content为空字符串
+        """
+        try:
+            # 获取文档元数据文件路径
+            doc_path = self._get_document_path(document_id)
+
+            if not doc_path.exists():
+                doc_path, _ = await self._find_document_in_projects(document_id)
+                if not doc_path or not doc_path.exists():
+                    return None
+
+            # 只加载元数据
+            with open(doc_path, 'r', encoding='utf-8') as f:
+                doc_data = json.load(f)
+
+            # 验证数据格式
+            if not isinstance(doc_data, dict):
+                logger.error(f"文档元数据格式无效: {doc_path}")
+                return None
+
+            # 创建文档对象但不加载内容
+            document_type = DocumentType(doc_data.get('type', 'chapter'))
+            document = create_document(
+                document_type=document_type,
+                title=doc_data['metadata']['title'],
+                document_id=doc_data['id'],
+                content="",  # 延迟加载
+                status=DocumentStatus(doc_data.get('status', 'draft')),
+                project_id=doc_data.get('project_id')
+            )
+
+            # 设置其他元数据
+            if 'metadata' in doc_data:
+                metadata = doc_data['metadata']
+                document.description = metadata.get('description', '')
+                document.tags = metadata.get('tags', [])
+                document.word_count = metadata.get('word_count', 0)
+                document.character_count = metadata.get('character_count', 0)
+
+                # 时间戳
+                if 'created_at' in metadata:
+                    document.created_at = datetime.fromisoformat(metadata['created_at'])
+                if 'updated_at' in metadata:
+                    document.updated_at = datetime.fromisoformat(metadata['updated_at'])
+
+            logger.debug(f"元数据加载完成: {document.title}")
+            return document
+
+        except Exception as e:
+            logger.error(f"加载文档元数据失败: {e}")
+            return None

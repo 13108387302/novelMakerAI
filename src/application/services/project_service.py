@@ -16,8 +16,15 @@ from src.domain.events.project_events import (
 )
 from src.shared.events.event_bus import EventBus
 from src.shared.utils.logger import get_logger
+from src.shared.constants import (
+    DEFAULT_TARGET_WORD_COUNT, DEFAULT_RECENT_PROJECTS_LIMIT
+)
 
 logger = get_logger(__name__)
+
+# 项目服务常量
+PROJECT_SUBDIRS = ["documents", "backups", "exports", "cache"]
+DEFAULT_EXPORT_FORMAT = "json"
 
 
 class ProjectService:
@@ -62,7 +69,7 @@ class ProjectService:
         project_type: ProjectType = ProjectType.NOVEL,
         description: str = "",
         author: str = "",
-        target_word_count: int = 80000,
+        target_word_count: int = DEFAULT_TARGET_WORD_COUNT,
         project_path: Optional[str] = None
     ) -> Optional[Project]:
         """
@@ -126,8 +133,7 @@ class ProjectService:
                 logger.info(f"项目根目录已创建: {project.root_path}")
 
                 # 在项目目录下创建必要的子目录
-                subdirs = ["documents", "backups", "exports", "cache"]
-                for subdir in subdirs:
+                for subdir in PROJECT_SUBDIRS:
                     subdir_path = project.root_path / subdir
                     subdir_path.mkdir(exist_ok=True)
                     logger.debug(f"子目录已创建: {subdir_path}")
@@ -315,7 +321,7 @@ class ProjectService:
             logger.error(f"获取项目列表失败: {e}")
             return []
     
-    async def get_recent_projects(self, limit: int = 10) -> List[Project]:
+    async def get_recent_projects(self, limit: int = DEFAULT_RECENT_PROJECTS_LIMIT) -> List[Project]:
         """获取最近的项目"""
         try:
             projects = await self.project_repository.get_recent_projects(limit)
@@ -398,7 +404,7 @@ class ProjectService:
         self,
         project_id: str,
         export_path: Path,
-        export_format: str = "json"
+        export_format: str = DEFAULT_EXPORT_FORMAT
     ) -> bool:
         """导出项目"""
         try:
@@ -419,7 +425,7 @@ class ProjectService:
     async def import_project(
         self,
         import_path: Path,
-        import_format: str = "json"
+        import_format: str = DEFAULT_EXPORT_FORMAT
     ) -> Optional[Project]:
         """导入项目"""
         try:
@@ -439,7 +445,17 @@ class ProjectService:
     def current_project(self) -> Optional[Project]:
         """当前项目"""
         return self._current_project
-    
+
+    def get_current_project(self) -> Optional[Project]:
+        """获取当前项目"""
+        return self._current_project
+
+    def get_current_project_path(self) -> Optional[Path]:
+        """获取当前项目路径"""
+        if self._current_project and hasattr(self._current_project, 'root_path'):
+            return self._current_project.root_path
+        return None
+
     @property
     def has_current_project(self) -> bool:
         """是否有当前项目"""

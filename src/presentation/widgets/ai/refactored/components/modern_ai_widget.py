@@ -35,6 +35,8 @@ class ModernAIWidget(QWidget):
         super().__init__(parent)
         self.selected_text = ""
         self.document_context = ""
+        self.document_type = "chapter"
+        self.document_metadata = {}
 
         # AI服务引用
         self.ai_orchestration_service = None
@@ -273,11 +275,36 @@ class ModernAIWidget(QWidget):
         """设置选中文本"""
         self.selected_text = text
         logger.debug(f"设置选中文本: {len(text)} 字符")
+
+    def set_context(self, content: str, selected_text: str = ""):
+        """设置上下文（兼容性方法）"""
+        self.document_context = content
+        self.selected_text = selected_text
+        logger.debug(f"设置上下文: {len(content)} 字符内容, {len(selected_text)} 字符选中文本")
     
-    def set_document_context(self, context: str):
+    def set_document_context(self, content: str, doc_type: str = "chapter", metadata: dict = None):
         """设置文档上下文"""
-        self.document_context = context
-        logger.debug(f"设置文档上下文: {len(context)} 字符")
+        if metadata is None:
+            metadata = {}
+
+        self.document_context = content
+        self.document_type = doc_type
+        self.document_metadata = metadata
+
+        logger.debug(f"设置文档上下文: {len(content)} 字符, 类型: {doc_type}")
+
+        # 如果有AI面板，更新其上下文
+        if hasattr(self, 'ai_panel') and self.ai_panel:
+            try:
+                if hasattr(self.ai_panel, 'set_document_info'):
+                    # 对于文档AI面板，设置文档信息
+                    document_id = metadata.get('id', 'unknown')
+                    self.ai_panel.set_document_info(document_id, doc_type)
+                elif hasattr(self.ai_panel, 'set_document_context'):
+                    # 对于其他AI面板，设置上下文
+                    self.ai_panel.set_document_context(content)
+            except Exception as e:
+                logger.debug(f"更新AI面板上下文失败: {e}")
     
     def execute_ai_request(self, function_name: str, prompt: str, options: dict = None):
         """

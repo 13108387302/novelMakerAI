@@ -12,6 +12,15 @@ from enum import Enum
 from typing import Dict, List, Optional, Set, Any, Callable
 from uuid import uuid4
 
+# 角色实体常量
+DEFAULT_SPECIES = "人类"
+MIN_INTENSITY = 1
+MAX_INTENSITY = 10
+DEFAULT_INTENSITY = 5
+MIN_AGE = 0
+MAX_AGE = 1000
+DEFAULT_RELATIONSHIP_LIMIT = 5
+
 
 class CharacterRole(Enum):
     """
@@ -150,13 +159,13 @@ class CharacterRelationship:
     target_character_id: str
     relationship_type: RelationshipType
     description: str
-    intensity: int = 5  # 1-10，关系强度
+    intensity: int = DEFAULT_INTENSITY  # 关系强度
     is_mutual: bool = True
     created_at: datetime = field(default_factory=datetime.now)
     
     def __post_init__(self):
-        if not 1 <= self.intensity <= 10:
-            raise ValueError("关系强度必须在1-10之间")
+        if not MIN_INTENSITY <= self.intensity <= MAX_INTENSITY:
+            raise ValueError(f"关系强度必须在{MIN_INTENSITY}-{MAX_INTENSITY}之间")
 
 
 @dataclass
@@ -165,7 +174,7 @@ class CharacterAppearance:
     document_id: str
     chapter_number: Optional[int] = None
     scene_description: str = ""
-    importance: int = 5  # 1-10，在该场景中的重要性
+    importance: int = DEFAULT_INTENSITY  # 在该场景中的重要性
     timestamp: datetime = field(default_factory=datetime.now)
 
 
@@ -205,7 +214,7 @@ class Character:
         self.nickname: Optional[str] = None
         self.age: Optional[int] = None
         self.gender: Optional[str] = None
-        self.species: str = "人类"
+        self.species: str = DEFAULT_SPECIES
         
         # 详细信息
         self.appearance = PhysicalAppearance()
@@ -237,7 +246,7 @@ class Character:
 
     def _validate_intensity(self, intensity: int) -> bool:
         """验证强度值"""
-        return 1 <= intensity <= 10
+        return MIN_INTENSITY <= intensity <= MAX_INTENSITY
     
     def update_name(self, new_name: str) -> None:
         """更新角色名称"""
@@ -284,7 +293,7 @@ class Character:
         target_character_id: str,
         relationship_type: RelationshipType,
         description: str,
-        intensity: int = 5,
+        intensity: int = DEFAULT_INTENSITY,
         is_mutual: bool = True
     ) -> None:
         """添加角色关系"""
@@ -298,7 +307,7 @@ class Character:
             raise ValueError("关系类型必须是RelationshipType枚举")
 
         if not self._validate_intensity(intensity):
-            raise ValueError("关系强度必须在1-10之间")
+            raise ValueError(f"关系强度必须在{MIN_INTENSITY}-{MAX_INTENSITY}之间")
 
         relationship = CharacterRelationship(
             target_character_id=target_character_id,
@@ -333,14 +342,14 @@ class Character:
         document_id: str,
         chapter_number: Optional[int] = None,
         scene_description: str = "",
-        importance: int = 5
+        importance: int = DEFAULT_INTENSITY
     ) -> None:
         """添加出场记录"""
         if not document_id or not document_id.strip():
             raise ValueError("文档ID不能为空")
 
         if not self._validate_intensity(importance):
-            raise ValueError("重要性值必须在1-10之间")
+            raise ValueError(f"重要性值必须在{MIN_INTENSITY}-{MAX_INTENSITY}之间")
 
         if chapter_number is not None and chapter_number < 0:
             raise ValueError("章节号不能为负数")
@@ -397,7 +406,7 @@ class Character:
         """计算关系网络规模"""
         return len(self._relationships)
     
-    def get_most_important_relationships(self, limit: int = 5) -> List[CharacterRelationship]:
+    def get_most_important_relationships(self, limit: int = DEFAULT_RELATIONSHIP_LIMIT) -> List[CharacterRelationship]:
         """获取最重要的关系"""
         return sorted(
             self._relationships.values(),
@@ -413,8 +422,8 @@ class Character:
         if not self._validate_string(self.name, "角色名称"):
             errors.append("角色名称不能为空")
 
-        if self.age is not None and (self.age < 0 or self.age > 1000):
-            errors.append("角色年龄必须在合理范围内")
+        if self.age is not None and (self.age < MIN_AGE or self.age > MAX_AGE):
+            errors.append(f"角色年龄必须在{MIN_AGE}-{MAX_AGE}范围内")
 
         # 验证关系的一致性
         for target_id, rel in self._relationships.items():
@@ -528,7 +537,7 @@ class Character:
         character.nickname = data.get("nickname")
         character.age = data.get("age")
         character.gender = data.get("gender")
-        character.species = data.get("species", "人类")
+        character.species = data.get("species", DEFAULT_SPECIES)
         
         # 外貌信息
         appearance_data = data.get("appearance", {})
@@ -584,7 +593,7 @@ class Character:
                     target_character_id=rel_data.get("target_character_id", ""),
                     relationship_type=RelationshipType(rel_data.get("relationship_type", "neutral")),
                     description=rel_data.get("description", ""),
-                    intensity=rel_data.get("intensity", 5),
+                    intensity=rel_data.get("intensity", DEFAULT_INTENSITY),
                     is_mutual=rel_data.get("is_mutual", True),
                     created_at=created_at,
                 )
@@ -610,7 +619,7 @@ class Character:
                     document_id=app_data.get("document_id", ""),
                     chapter_number=app_data.get("chapter_number"),
                     scene_description=app_data.get("scene_description", ""),
-                    importance=app_data.get("importance", 5),
+                    importance=app_data.get("importance", DEFAULT_INTENSITY),
                     timestamp=timestamp,
                 ))
             except (ValueError, KeyError, TypeError):

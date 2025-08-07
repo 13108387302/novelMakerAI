@@ -53,36 +53,47 @@ class MenuBuilder(QObject):
         """创建文件菜单"""
         file_menu = menubar.addMenu("文件(&F)")
         
-        # 新建项目
+        # 新建项目 (快捷键由快捷键管理器统一管理)
         new_project_action = QAction("新建项目(&N)", main_window)
-        new_project_action.setShortcut(QKeySequence.StandardKey.New)
+        # 不在这里设置快捷键，避免重复注册
+        # new_project_action.setShortcut(QKeySequence.StandardKey.New)
         new_project_action.triggered.connect(lambda: self._emit_action("new_project", new_project_action))
         file_menu.addAction(new_project_action)
         self.actions["new_project"] = new_project_action
         
-        # 打开项目
+        # 打开项目 (快捷键由快捷键管理器统一管理)
         open_project_action = QAction("打开项目(&O)", main_window)
-        open_project_action.setShortcut(QKeySequence.StandardKey.Open)
+        # 不在这里设置快捷键，避免重复注册
+        # open_project_action.setShortcut(QKeySequence.StandardKey.Open)
         open_project_action.triggered.connect(lambda: self._emit_action("open_project", open_project_action))
         file_menu.addAction(open_project_action)
         self.actions["open_project"] = open_project_action
-        
+
+        # 关闭项目
+        close_project_action = QAction("关闭项目(&C)", main_window)
+        close_project_action.setShortcut("Ctrl+W")
+        close_project_action.triggered.connect(lambda: self._emit_action("close_project", close_project_action))
+        file_menu.addAction(close_project_action)
+        self.actions["close_project"] = close_project_action
+
         # 最近项目
         recent_menu = file_menu.addMenu("最近项目(&R)")
         self.actions["recent_menu"] = recent_menu
         
         file_menu.addSeparator()
         
-        # 保存
+        # 保存 (快捷键由快捷键管理器统一管理)
         save_action = QAction("保存(&S)", main_window)
-        save_action.setShortcut(QKeySequence.StandardKey.Save)
+        # 不在这里设置快捷键，避免重复注册
+        # save_action.setShortcut(QKeySequence.StandardKey.Save)
         save_action.triggered.connect(lambda: self._emit_action("save", save_action))
         file_menu.addAction(save_action)
         self.actions["save"] = save_action
         
-        # 另存为
+        # 另存为 (快捷键由快捷键管理器统一管理)
         save_as_action = QAction("另存为(&A)", main_window)
-        save_as_action.setShortcut(QKeySequence.StandardKey.SaveAs)
+        # 不在这里设置快捷键，避免重复注册
+        # save_as_action.setShortcut(QKeySequence.StandardKey.SaveAs)
         save_as_action.triggered.connect(lambda: self._emit_action("save_as", save_as_action))
         file_menu.addAction(save_as_action)
         self.actions["save_as"] = save_as_action

@@ -16,8 +16,24 @@ from .base_ai_client import BaseAIClient
 from src.domain.ai.entities.ai_request import AIRequest
 from src.domain.ai.entities.ai_response import AIResponse, AIResponseStatus
 from src.domain.ai.value_objects.ai_capability import AICapability
+from src.shared.constants import (
+    AI_TIMEOUT_SECONDS, AI_MAX_TOKENS, AI_TEMPERATURE
+)
 
 logger = logging.getLogger(__name__)
+
+# DeepSeek客户端常量
+DEFAULT_DEEPSEEK_BASE_URL = 'https://api.deepseek.com/v1'
+DEFAULT_DEEPSEEK_MODEL = 'deepseek-chat'
+DEFAULT_MAX_TOKENS = AI_MAX_TOKENS
+DEFAULT_TEMPERATURE = AI_TEMPERATURE
+SYSTEM_ROLE = "system"
+USER_ROLE = "user"
+TEST_MAX_TOKENS = 1
+CONNECTION_TIMEOUT = AI_TIMEOUT_SECONDS
+API_KEY_ERROR_MSG = "DeepSeek API密钥未配置"
+CLIENT_NOT_CONNECTED_MSG = "DeepSeek客户端未连接"
+CLIENT_NOT_INITIALIZED_MSG = "客户端未初始化"
 
 
 class DeepSeekClient(BaseAIClient):
@@ -38,10 +54,10 @@ class DeepSeekClient(BaseAIClient):
         
         # DeepSeek配置
         self.api_key = config.get('api_key', '')
-        self.base_url = config.get('base_url', 'https://api.deepseek.com/v1')
-        self.default_model = config.get('default_model', 'deepseek-chat')
-        self.max_tokens = config.get('max_tokens', 2000)
-        self.temperature = config.get('temperature', 0.7)
+        self.base_url = config.get('base_url', DEFAULT_DEEPSEEK_BASE_URL)
+        self.default_model = config.get('default_model', DEFAULT_DEEPSEEK_MODEL)
+        self.max_tokens = config.get('max_tokens', DEFAULT_MAX_TOKENS)
+        self.temperature = config.get('temperature', DEFAULT_TEMPERATURE)
         
         # 客户端实例
         self.client: Optional[AsyncOpenAI] = None

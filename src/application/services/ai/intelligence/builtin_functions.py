@@ -11,10 +11,139 @@ from typing import Dict, Any, Optional
 
 from .ai_intelligence_service import AIIntelligentFunction
 from .ai_function_registry import register_ai_function, AIFunctionCategory
+from .deep_context_analyzer import DeepContextAnalyzer
+from .intelligent_prompt_builder import IntelligentPromptBuilder
+from .ai_response_evaluator import AIResponseEvaluator
 from src.domain.ai.value_objects.ai_execution_mode import AIExecutionMode
 from src.domain.ai.value_objects.ai_request_type import AIRequestType
 
 logger = logging.getLogger(__name__)
+
+
+class EnhancedAIIntelligentFunction(AIIntelligentFunction):
+    """
+    增强的智能AI功能基类
+
+    集成深度上下文分析、智能提示词生成和响应质量评估
+    """
+
+    def __init__(self):
+        super().__init__()
+        # 初始化深度分析组件
+        self._context_analyzer = DeepContextAnalyzer()
+        self._prompt_builder = IntelligentPromptBuilder(self._context_analyzer)
+        self._response_evaluator = AIResponseEvaluator(self._context_analyzer)
+
+        logger.info(f"增强AI功能初始化: {self.__class__.__name__}")
+
+    def _build_intelligent_prompt(self, input_text: str, context: str, selected_text: str) -> str:
+        """
+        构建智能化提示词（增强版本）
+
+        使用深度上下文分析和智能提示词构建器
+        """
+        try:
+            # 使用智能提示词构建器
+            intelligent_prompt = self._prompt_builder.build_intelligent_prompt(
+                content=context,
+                request_type=self._get_request_type(),
+                selected_text=selected_text,
+                user_intent=input_text,
+                target_length=self._get_target_length()
+            )
+
+            logger.info(f"智能提示词构建完成，质量评分: {intelligent_prompt.estimated_quality:.2f}")
+            logger.debug(f"构建推理: {intelligent_prompt.reasoning}")
+
+            return intelligent_prompt.content
+
+        except Exception as e:
+            logger.error(f"智能提示词构建失败: {e}")
+            # 回退到原有方法
+            return super()._build_intelligent_prompt(input_text, context, selected_text)
+
+    def _get_target_length(self) -> int:
+        """获取目标长度（子类可重写）"""
+        return 300
+
+    def evaluate_response(self, ai_response: str, original_context: str) -> Dict[str, Any]:
+        """
+        评估AI响应质量
+
+        Args:
+            ai_response: AI生成的响应
+            original_context: 原始上下文
+
+        Returns:
+            Dict[str, Any]: 评估结果
+        """
+        try:
+            assessment = self._response_evaluator.evaluate_response(
+                ai_response=ai_response,
+                original_context=original_context,
+                request_type=self._get_request_type().value
+            )
+
+            return {
+                'overall_score': assessment.overall_score,
+                'overall_level': assessment.overall_level.value,
+                'strengths': assessment.strengths,
+                'weaknesses': assessment.weaknesses,
+                'suggestions': assessment.improvement_suggestions,
+                'confidence': assessment.confidence,
+                'summary': assessment.evaluation_summary
+            }
+
+        except Exception as e:
+            logger.error(f"响应质量评估失败: {e}")
+            return {
+                'overall_score': 60.0,
+                'overall_level': 'acceptable',
+                'strengths': [],
+                'weaknesses': ['评估失败'],
+                'suggestions': ['建议重新评估'],
+                'confidence': 0.3,
+                'summary': '评估过程中出现错误'
+            }
+
+    def get_context_analysis(self, content: str) -> Dict[str, Any]:
+        """
+        获取上下文分析结果
+
+        Args:
+            content: 要分析的内容
+
+        Returns:
+            Dict[str, Any]: 分析结果
+        """
+        try:
+            writing_context = self._context_analyzer.analyze_writing_context(content)
+
+            return {
+                'narrative_voice': writing_context.narrative_voice.description,
+                'writing_style': writing_context.writing_style.get_description(),
+                'emotional_tone': writing_context.emotional_tone.value,
+                'characters': list(writing_context.character_analysis.keys()),
+                'themes': writing_context.themes,
+                'genre_indicators': writing_context.genre_indicators,
+                'literary_devices': writing_context.literary_devices,
+                'scene_setting': writing_context.scene_setting.get_description(),
+                'keywords': writing_context.keywords[:10]  # 前10个关键词
+            }
+
+        except Exception as e:
+            logger.error(f"上下文分析失败: {e}")
+            return {
+                'narrative_voice': '未知',
+                'writing_style': '未知',
+                'emotional_tone': 'neutral',
+                'characters': [],
+                'themes': [],
+                'genre_indicators': [],
+                'literary_devices': [],
+                'scene_setting': '未知',
+                'keywords': []
+            }
 
 
 @register_ai_function(
@@ -30,7 +159,7 @@ logger = logging.getLogger(__name__)
     estimated_time=15,
     smart_description="100%智能化：无需任何输入，AI自动分析文档内容并续写"
 )
-class IntelligentContinuationFunction(AIIntelligentFunction):
+class IntelligentContinuationFunction(EnhancedAIIntelligentFunction):
     """智能续写功能 - 100%智能化"""
     
     def can_auto_execute(self, context: str = "", selected_text: str = "") -> bool:
@@ -38,12 +167,54 @@ class IntelligentContinuationFunction(AIIntelligentFunction):
         return len(context.strip()) >= self.metadata.min_context_length
     
     def _build_intelligent_prompt(self, input_text: str, context: str, selected_text: str) -> str:
-        """构建智能化提示词"""
-        # 分析上下文类型
+        """构建智能化提示词（增强版本）"""
+        try:
+            # 使用父类的增强方法
+            enhanced_prompt = super()._build_intelligent_prompt(input_text, context, selected_text)
+
+            # 如果增强方法成功，直接返回
+            if enhanced_prompt and len(enhanced_prompt) > 100:
+                return enhanced_prompt
+
+        except Exception as e:
+            logger.warning(f"增强提示词构建失败，使用原有方法: {e}")
+
+        # 回退到原有方法
         context_type = self._analyze_context_type(context)
-        
-        # 构建智能化提示词
-        prompt = f"""请基于以下{context_type}内容进行智能续写：
+
+        # 获取上下文分析（如果可用）
+        try:
+            context_analysis = self.get_context_analysis(context)
+            narrative_voice = context_analysis.get('narrative_voice', '第三人称叙述')
+            writing_style = context_analysis.get('writing_style', '适中平衡的写作风格')
+            emotional_tone = context_analysis.get('emotional_tone', 'neutral')
+
+            # 构建增强的提示词
+            prompt = f"""请基于以下{context_type}内容进行智能续写：
+
+【原文内容】
+{context}
+
+【写作分析】
+- 叙述视角: {narrative_voice}
+- 写作风格: {writing_style}
+- 情感基调: {emotional_tone}
+
+【续写要求】
+1. 严格保持{narrative_voice}的叙述视角
+2. 延续{writing_style}的表达特色
+3. 保持{emotional_tone}的情感氛围
+4. 确保情节发展的逻辑连贯性
+5. 字数控制在200-500字之间
+6. 如果涉及角色，请保持性格一致性
+7. 如果涉及场景，请保持环境连贯性
+
+请开始智能续写："""
+
+        except Exception as e:
+            logger.warning(f"上下文分析失败，使用简化提示词: {e}")
+            # 最简化的回退版本
+            prompt = f"""请基于以下{context_type}内容进行智能续写：
 
 {context}
 
@@ -55,7 +226,7 @@ class IntelligentContinuationFunction(AIIntelligentFunction):
 5. 如果是描述，请保持场景氛围连贯
 
 请开始续写："""
-        
+
         return prompt
     
     def _analyze_context_type(self, context: str) -> str:
@@ -86,7 +257,7 @@ class IntelligentContinuationFunction(AIIntelligentFunction):
     estimated_time=12,
     smart_description="智能化：自动选择优化目标，无需手动指定"
 )
-class IntelligentOptimizationFunction(AIIntelligentFunction):
+class IntelligentOptimizationFunction(EnhancedAIIntelligentFunction):
     """智能优化功能 - 混合智能化"""
     
     def can_auto_execute(self, context: str = "", selected_text: str = "") -> bool:
@@ -165,7 +336,7 @@ class IntelligentOptimizationFunction(AIIntelligentFunction):
     estimated_time=10,
     smart_description="智能化：选中文字即可自动分析，无需额外操作"
 )
-class IntelligentAnalysisFunction(AIIntelligentFunction):
+class IntelligentAnalysisFunction(EnhancedAIIntelligentFunction):
     """智能分析功能 - 自动选择模式"""
     
     def can_auto_execute(self, context: str = "", selected_text: str = "") -> bool:
@@ -173,10 +344,52 @@ class IntelligentAnalysisFunction(AIIntelligentFunction):
         return len(selected_text.strip()) >= self.metadata.min_context_length
     
     def _build_intelligent_prompt(self, input_text: str, context: str, selected_text: str) -> str:
-        """构建智能化提示词"""
+        """构建智能化提示词（增强版本）"""
+        try:
+            # 使用父类的增强方法
+            enhanced_prompt = super()._build_intelligent_prompt(input_text, context, selected_text)
+
+            if enhanced_prompt and len(enhanced_prompt) > 100:
+                return enhanced_prompt
+
+        except Exception as e:
+            logger.warning(f"增强提示词构建失败，使用原有方法: {e}")
+
+        # 回退到增强的原有方法
         analysis_aspects = self._determine_analysis_aspects(selected_text)
-        
-        prompt = f"""请对以下选中文字进行深度分析：
+
+        try:
+            # 获取深度上下文分析
+            context_analysis = self.get_context_analysis(selected_text)
+
+            prompt = f"""请对以下选中文字进行专业深度分析：
+
+【分析文本】
+{selected_text}
+
+【智能识别结果】
+- 叙述视角: {context_analysis.get('narrative_voice', '未识别')}
+- 写作风格: {context_analysis.get('writing_style', '未识别')}
+- 情感基调: {context_analysis.get('emotional_tone', '未识别')}
+- 文体特征: {', '.join(context_analysis.get('genre_indicators', [])) or '未识别'}
+- 文学手法: {', '.join(context_analysis.get('literary_devices', [])) or '未识别'}
+
+【专业分析维度】
+{analysis_aspects}
+
+【分析要求】
+1. 结合智能识别结果进行深度分析
+2. 提供具体的文本证据支持分析结论
+3. 从文学创作角度给出专业评价
+4. 指出写作技巧的优点和可改进之处
+5. 提供具体可操作的改进建议
+6. 评估文本的艺术价值和表达效果
+
+请提供专业详细的分析报告："""
+
+        except Exception as e:
+            logger.warning(f"深度分析失败，使用简化版本: {e}")
+            prompt = f"""请对以下选中文字进行深度分析：
 
 分析文本：
 {selected_text}
@@ -192,7 +405,7 @@ class IntelligentAnalysisFunction(AIIntelligentFunction):
 5. 评估整体效果
 
 请提供详细的分析报告："""
-        
+
         return prompt
     
     def _determine_analysis_aspects(self, text: str) -> str:
@@ -234,7 +447,7 @@ class IntelligentAnalysisFunction(AIIntelligentFunction):
     estimated_time=8,
     smart_description="智能化：自动分析文档并生成相关创意灵感"
 )
-class IntelligentInspirationFunction(AIIntelligentFunction):
+class IntelligentInspirationFunction(EnhancedAIIntelligentFunction):
     """智能灵感功能 - 100%智能化"""
     
     def can_auto_execute(self, context: str = "", selected_text: str = "") -> bool:

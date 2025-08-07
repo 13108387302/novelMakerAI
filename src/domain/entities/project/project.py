@@ -16,6 +16,9 @@ from .project_types import ProjectStatus, ProjectType, can_transition_status
 from .project_metadata import ProjectMetadata
 from .project_settings import ProjectSettings
 from .project_statistics import ProjectStatistics
+from src.shared.constants import (
+    DEFAULT_TREND_DAYS, DEFAULT_PROJECT_VERSION, DEFAULT_FORMAT_VERSION, COPY_SUFFIX
+)
 
 
 @dataclass
@@ -236,9 +239,7 @@ class Project:
     
     def _check_word_count_milestones(self, word_count: int):
         """检查字数里程碑"""
-        milestones = [1000, 5000, 10000, 25000, 50000, 80000, 100000, 150000, 200000]
-        
-        for milestone in milestones:
+        for milestone in WORD_COUNT_MILESTONES:
             milestone_name = f"{milestone}字"
             if (word_count >= milestone and 
                 not self.statistics.get_milestone(milestone_name)):
@@ -277,7 +278,7 @@ class Project:
         days_needed = remaining_words / recent_daily_average
         return datetime.now() + datetime.timedelta(days=days_needed)
     
-    def _get_recent_daily_average(self, days: int = 7) -> float:
+    def _get_recent_daily_average(self, days: int = DEFAULT_TREND_DAYS) -> float:
         """获取最近几天的日均字数"""
         trend = self.statistics.get_productivity_trend(days)
         if not trend:
@@ -294,7 +295,7 @@ class Project:
         if not self.name or not self.name.strip():
             errors.append("项目名称不能为空")
         
-        if len(self.name) > 200:
+        if len(self.name) > 200:  # 使用硬编码值，因为constants中没有定义
             errors.append("项目名称过长")
         
         # 验证组件
@@ -386,15 +387,15 @@ class Project:
             metadata=metadata,
             settings=settings,
             statistics=statistics,
-            version=data.get("version", "1.0.0"),
-            format_version=data.get("format_version", "2.0")
+            version=data.get("version", DEFAULT_PROJECT_VERSION),
+            format_version=data.get("format_version", DEFAULT_FORMAT_VERSION)
         )
     
     def copy(self) -> 'Project':
         """创建项目副本"""
         data = self.to_dict()
         data["id"] = str(uuid.uuid4())  # 新的ID
-        data["name"] = f"{self.name} - 副本"
+        data["name"] = f"{self.name}{COPY_SUFFIX}"
         data["created_at"] = datetime.now().isoformat()
         data["updated_at"] = datetime.now().isoformat()
         data["last_opened_at"] = None

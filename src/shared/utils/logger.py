@@ -13,6 +13,21 @@ from pathlib import Path
 from typing import Optional
 
 from config.settings import Settings
+from src.shared.constants import TIME_FORMATS, ENCODING_FORMATS
+
+# 日志格式常量
+CONSOLE_LOG_FORMAT = '%(asctime)s | %(name)-20s | %(levelname)-8s | %(message)s'
+FILE_LOG_FORMAT = '%(asctime)s | %(name)-20s | %(levelname)-8s | %(funcName)-15s | %(message)s'
+CONSOLE_TIME_FORMAT = '%H:%M:%S'
+FILE_TIME_FORMAT = TIME_FORMATS['datetime']
+DEFAULT_ENCODING = ENCODING_FORMATS['utf8']
+
+# 第三方库日志级别配置
+THIRD_PARTY_LOG_LEVELS = {
+    'PyQt6': 'WARNING',
+    'urllib3': 'WARNING',
+    'requests': 'WARNING'
+}
 
 
 class ColoredFormatter(logging.Formatter):
@@ -96,38 +111,37 @@ def setup_logging(settings: Optional[Settings] = None) -> None:
     
     # 控制台格式化器（带颜色）
     console_formatter = ColoredFormatter(
-        '%(asctime)s | %(name)-20s | %(levelname)-8s | %(message)s',
-        datefmt='%H:%M:%S'
+        CONSOLE_LOG_FORMAT,
+        datefmt=CONSOLE_TIME_FORMAT
     )
     console_handler.setFormatter(console_formatter)
     root_logger.addHandler(console_handler)
     
-    # 文件处理器（如果配置了文件路径）
-    if settings.logging.file_path:
-        file_path = Path(settings.logging.file_path)
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        # 使用RotatingFileHandler支持日志轮转
-        file_handler = logging.handlers.RotatingFileHandler(
-            file_path,
-            maxBytes=settings.logging.max_file_size,
-            backupCount=settings.logging.backup_count,
-            encoding='utf-8'
-        )
-        file_handler.setLevel(getattr(logging, settings.logging.level))
-        
-        # 文件格式化器（不带颜色）
-        file_formatter = logging.Formatter(
-            '%(asctime)s | %(name)-20s | %(levelname)-8s | %(funcName)-15s | %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S'
-        )
-        file_handler.setFormatter(file_formatter)
-        root_logger.addHandler(file_handler)
+    # 文件处理器 - 使用覆盖模式保存到项目根目录的.log文件
+    # 获取项目根目录
+    project_root = Path(__file__).parent.parent.parent.parent  # 从src/shared/utils/logger.py回到项目根目录
+    log_file_path = project_root / ".log"
+
+    # 使用普通FileHandler，每次启动时覆盖日志文件
+    file_handler = logging.FileHandler(
+        log_file_path,
+        mode='w',  # 覆盖模式
+        encoding=DEFAULT_ENCODING
+    )
+    # 文件只记录警告和错误信息
+    file_handler.setLevel(logging.WARNING)
+
+    # 文件格式化器（不带颜色）
+    file_formatter = logging.Formatter(
+        FILE_LOG_FORMAT,
+        datefmt=FILE_TIME_FORMAT
+    )
+    file_handler.setFormatter(file_formatter)
+    root_logger.addHandler(file_handler)
     
     # 设置第三方库的日志级别
-    logging.getLogger('PyQt6').setLevel(logging.WARNING)
-    logging.getLogger('urllib3').setLevel(logging.WARNING)
-    logging.getLogger('requests').setLevel(logging.WARNING)
+    for lib_name, level_name in THIRD_PARTY_LOG_LEVELS.items():
+        logging.getLogger(lib_name).setLevel(getattr(logging, level_name))
 
     # 为AI模块设置DEBUG级别，确保调试信息显示
     ai_modules = [
@@ -146,7 +160,11 @@ def setup_logging(settings: Optional[Settings] = None) -> None:
         logging.getLogger(module_name).setLevel(logging.DEBUG)
 
     logging.info("日志系统初始化完成")
+    logging.info(f"📝 日志文件位置: {project_root / '.log'}")
+    logging.info(f"🖥️  控制台日志级别: {settings.logging.level}")
+    logging.info("⚠️  文件日志级别: WARNING (只记录警告和错误)")
     logging.info("🔍 AI模块调试日志已启用")
+    logging.info("ℹ️  每次启动时日志文件将被覆盖，只保留当前运行的日志")
 
 
 def get_logger(name: str) -> logging.Logger:
