@@ -20,8 +20,7 @@ from src.domain.ai.value_objects.ai_capability import AICapability
 from src.infrastructure.ai.clients.ai_client_factory import AIClientFactory
 from src.infrastructure.ai.clients.base_ai_client import BaseAIClient
 from src.shared.constants import (
-    AI_MAX_CONCURRENT_REQUESTS, AI_TIMEOUT_SECONDS, AI_RETRY_ATTEMPTS,
-    AI_HEALTH_CHECK_INTERVAL
+    AI_MAX_CONCURRENT_REQUESTS, AI_TIMEOUT_SECONDS, AI_RETRY_ATTEMPTS
 )
 
 logger = logging.getLogger(__name__)
@@ -77,8 +76,7 @@ class AIOrchestrationService:
         self.failed_requests = 0
         self.start_time = datetime.now()
 
-        # 任务管理
-        self._health_check_task: Optional[asyncio.Task] = None  # 健康检查任务引用
+
     
     async def initialize(self) -> bool:
         """
@@ -90,9 +88,6 @@ class AIOrchestrationService:
         try:
             # 初始化AI客户端
             await self._initialize_clients()
-            
-            # 启动健康检查
-            self._health_check_task = asyncio.create_task(self._health_check_loop())
             
             self.is_initialized = True
             logger.info("AI编排服务初始化成功")
@@ -197,11 +192,18 @@ class AIOrchestrationService:
                     raise RuntimeError(f"提供商客户端不可用: {provider}")
                 
                 # 流式处理
+                logger.debug(f"开始流式处理请求: {request.id}")
+                chunk_count = 0
                 async for chunk in client.generate_text_stream(
                     request=request,
                     timeout=self._calculate_timeout(request)
                 ):
-                    yield chunk
+                    if chunk:  # 只处理非空chunk
+                        chunk_count += 1
+                        logger.debug(f"收到chunk {chunk_count}: {len(chunk)} 字符")
+                        yield chunk
+
+                logger.debug(f"流式处理完成，共处理 {chunk_count} 个chunk")
                 
                 self.successful_requests += 1
                 
@@ -214,23 +216,7 @@ class AIOrchestrationService:
                 # 清理活动请求
                 self.active_requests.pop(request.id, None)
     
-    async def cancel_request(self, request_id: str) -> bool:
-        """
-        取消AI请求
-        
-        Args:
-            request_id: 请求ID
-            
-        Returns:
-            bool: 是否成功取消
-        """
-        request = self.active_requests.get(request_id)
-        if request:
-            request.cancel()
-            self.active_requests.pop(request_id, None)
-            logger.info(f"AI请求已取消: {request_id}")
-            return True
-        return False
+
     
     async def get_available_providers(self) -> List[str]:
         """
@@ -291,23 +277,11 @@ class AIOrchestrationService:
         """关闭服务"""
         logger.info("正在关闭AI编排服务...")
 
-        # 首先设置关闭标志，停止健康检查循环
+        # 设置关闭标志
         self.is_initialized = False
 
-        # 取消健康检查任务
-        if self._health_check_task and not self._health_check_task.done():
-            logger.info("取消健康检查任务...")
-            self._health_check_task.cancel()
-            try:
-                await self._health_check_task
-            except asyncio.CancelledError:
-                logger.info("健康检查任务已取消")
-            except Exception as e:
-                logger.warning(f"取消健康检查任务时出错: {e}")
-
-        # 取消所有活动请求
-        for request_id in list(self.active_requests.keys()):
-            await self.cancel_request(request_id)
+        # 清理活动请求
+        self.active_requests.clear()
 
         # 断开所有客户端
         for client in self.clients.values():
@@ -406,27 +380,4 @@ class AIOrchestrationService:
         priority_multiplier = request.priority.timeout_multiplier
         return base_timeout * priority_multiplier
     
-    async def _health_check_loop(self) -> None:
-        """健康检查循环"""
-        while self.is_initialized:
-            try:
-                for provider, client in self.clients.items():
-                    try:
-                        is_healthy = await client.is_healthy()
-                        self.client_health[provider] = is_healthy
-                        
-                        if not is_healthy:
-                            logger.warning(f"AI客户端不健康: {provider}")
-                            
-                    except Exception as e:
-                        logger.error(f"健康检查失败: {provider}, 错误: {e}")
-                        self.client_health[provider] = False
-                
-                # 定期健康检查
-                await asyncio.sleep(AI_HEALTH_CHECK_INTERVAL)
-                
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error(f"健康检查循环错误: {e}")
-                await asyncio.sleep(AI_HEALTH_CHECK_INTERVAL)
+

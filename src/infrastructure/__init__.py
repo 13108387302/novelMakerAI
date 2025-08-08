@@ -25,14 +25,31 @@ __description__ = "AI小说编辑器基础设施层"
 
 # 导出主要组件
 try:
-    from .repositories.ai_service_repository import AIServiceRepository
+    # 新的统一AI客户端管理器
+    from .ai.unified_ai_client_manager import UnifiedAIClientManager, get_unified_ai_client_manager
+
+    # AI客户端组件
+    from .ai.clients.ai_client_factory import AIClientFactory
+    from .ai.clients.base_ai_client import BaseAIClient
+
+    # 文件仓储组件
     from .repositories.file_project_repository import FileProjectRepository
     from .repositories.file_document_repository import FileDocumentRepository
 
     __all__ = [
-        "AIServiceRepository",
+        # 统一AI客户端管理
+        "UnifiedAIClientManager",
+        "get_unified_ai_client_manager",
+
+        # AI客户端组件
+        "AIClientFactory",
+        "BaseAIClient",
+
+        # 文件仓储
         "FileProjectRepository",
         "FileDocumentRepository",
+
+        # 版本信息
         "__version__",
         "__description__"
     ]

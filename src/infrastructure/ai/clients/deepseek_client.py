@@ -237,9 +237,19 @@ class DeepSeekClient(BaseAIClient):
                 timeout=timeout or self.stream_timeout
             )
             
+            chunk_count = 0
             async for chunk in stream:
+                chunk_count += 1
+                logger.debug(f"🔄 DeepSeek chunk {chunk_count}: {chunk}")
+
                 if chunk.choices and chunk.choices[0].delta.content:
-                    yield chunk.choices[0].delta.content
+                    content = chunk.choices[0].delta.content
+                    logger.debug(f"📦 提取内容: '{content}' (长度: {len(content)})")
+                    yield content
+                else:
+                    logger.debug(f"⚠️ 空chunk或无内容: choices={bool(chunk.choices)}")
+
+            logger.info(f"✅ DeepSeek流式生成完成，共处理 {chunk_count} 个chunk")
                     
         except Exception as e:
             logger.error(f"DeepSeek流式生成失败: {e}")

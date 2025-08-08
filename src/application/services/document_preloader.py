@@ -17,7 +17,7 @@ from collections import defaultdict, deque
 from src.domain.entities.document import Document
 from src.domain.repositories.document_repository import IDocumentRepository
 from src.shared.utils.logger import get_logger
-from src.shared.utils.cache_manager import get_cache_manager
+from src.shared.utils.unified_performance import get_performance_manager
 
 logger = get_logger(__name__)
 
@@ -55,7 +55,7 @@ class DocumentPreloader:
     
     def __init__(self, document_repository: IDocumentRepository):
         self.document_repository = document_repository
-        self.cache_manager = get_cache_manager()
+        self.performance_manager = get_performance_manager()
         
         # 预加载队列和状态
         self.preload_queue = asyncio.Queue()

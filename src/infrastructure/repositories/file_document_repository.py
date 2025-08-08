@@ -16,7 +16,8 @@ import asyncio
 from src.domain.entities.document import Document, DocumentType, DocumentStatus, create_document
 from src.domain.repositories.document_repository import IDocumentRepository
 from src.shared.utils.logger import get_logger
-from src.shared.utils.cache_manager import get_cache_manager
+from src.shared.utils.unified_performance import get_performance_manager, performance_monitor
+from src.shared.utils.unified_error_handler import get_error_handler, ErrorCategory, ErrorSeverity
 from src.shared.constants import (
     ENCODING_FORMATS, CACHE_EXPIRE_SECONDS, VERSION_KEEP_COUNT
 )
@@ -70,8 +71,9 @@ class FileDocumentRepository(IDocumentRepository):
         self.base_path = base_path or Path.home() / DEFAULT_DOCUMENTS_DIR
         self.base_path.mkdir(parents=True, exist_ok=True)
 
-        # 使用统一的缓存管理器
-        self._cache_manager = get_cache_manager()
+        # 使用统一的性能管理器
+        self.performance_manager = get_performance_manager()
+        self.error_handler = get_error_handler()
 
         # 缓存键前缀
         self._cache_prefix = CACHE_PREFIX
@@ -105,15 +107,16 @@ class FileDocumentRepository(IDocumentRepository):
         try:
             # 检查统一缓存
             cache_key = f"{self._cache_prefix}:doc_paths:{document_id}"
-            cached_paths = self._cache_manager.get(cache_key)
+            cache_result = self.performance_manager.cache_get(cache_key)
 
-            if cached_paths:
+            if cache_result.success:
+                cached_paths = cache_result.data
                 if cached_paths[0] and cached_paths[0].exists():
                     logger.debug(f"⚡ 从缓存中找到文档: {cached_paths[0]}")
                     return cached_paths
                 else:
                     # 缓存的路径不存在，移除缓存
-                    self._cache_manager.delete(cache_key)
+                    self.performance_manager.cache_delete(cache_key)
 
             from config.settings import get_settings
             settings = get_settings()
@@ -129,7 +132,7 @@ class FileDocumentRepository(IDocumentRepository):
 
                         # 缓存结果到统一缓存管理器
                         cache_key = f"{self._cache_prefix}:doc_paths:{document_id}"
-                        self._cache_manager.set(cache_key, (doc_path, content_path), ttl=LONG_CACHE_TTL)
+                        self.performance_manager.cache_set(cache_key, (doc_path, content_path), ttl=LONG_CACHE_TTL)
 
                         return doc_path, content_path
 
@@ -236,12 +239,10 @@ class FileDocumentRepository(IDocumentRepository):
             logger.error(f"保存文档失败: {e}")
             return False
     
+    @performance_monitor("文档加载")
     async def load(self, document_id: str) -> Optional[Document]:
         """根据ID加载文档（性能优化版本）"""
         try:
-            import time
-            start_time = time.time()
-
             # 首先尝试从默认路径加载
             doc_path = self._get_document_path(document_id)
             content_path = self._get_content_path(document_id)
@@ -252,34 +253,58 @@ class FileDocumentRepository(IDocumentRepository):
                 if not doc_path or not doc_path.exists():
                     return None
 
-            # 加载元数据
+            # 使用统一性能管理器的缓存加载元数据
+            cache_key = f"{self._cache_prefix}_metadata_{document_id}"
+            cache_result = self.performance_manager.cache_get(cache_key)
+
+            if cache_result.success:
+                metadata_content = cache_result.data
+            else:
+                # 从文件读取
+                try:
+                    with open(doc_path, 'r', encoding=DEFAULT_ENCODING) as f:
+                        metadata_content = f.read()
+                    # 缓存元数据
+                    self.performance_manager.cache_set(cache_key, metadata_content, ttl=LONG_CACHE_TTL)
+                except Exception as e:
+                    self.error_handler.handle_error(
+                        error=e,
+                        operation="load_document_metadata",
+                        category=ErrorCategory.FILE_IO,
+                        severity=ErrorSeverity.MEDIUM
+                    )
+                    return None
+
+            if not metadata_content:
+                return None
+
+            # 解析元数据
             try:
-                with open(doc_path, 'r', encoding='utf-8') as f:
-                    doc_data = json.load(f)
+                doc_data = json.loads(metadata_content)
 
                 # 验证数据格式
                 if not isinstance(doc_data, dict):
                     logger.error(f"文档元数据格式无效: {doc_path}")
                     return None
 
-            except (json.JSONDecodeError, UnicodeDecodeError) as e:
-                logger.error(f"文档元数据文件格式错误 {doc_path}: {e}")
+            except json.JSONDecodeError as e:
+                logger.error(f"文档元数据JSON格式错误 {doc_path}: {e}")
                 return None
 
-            # 加载内容
+            # 直接从文件加载内容
             content = ""
             if content_path and content_path.exists():
                 try:
-                    with open(content_path, 'r', encoding='utf-8') as f:
+                    with open(content_path, 'r', encoding=DEFAULT_ENCODING) as f:
                         content = f.read()
-                except UnicodeDecodeError as e:
-                    logger.warning(f"文档内容编码错误 {content_path}: {e}")
-                    # 尝试其他编码
-                    try:
-                        with open(content_path, 'r', encoding='gbk') as f:
-                            content = f.read()
-                    except Exception:
-                        content = ""
+                except Exception as e:
+                    self.error_handler.handle_error(
+                        error=e,
+                        operation="load_document_content",
+                        category=ErrorCategory.FILE_IO,
+                        severity=ErrorSeverity.MEDIUM
+                    )
+                    content = ""
 
             doc_data['content'] = content
             
@@ -305,8 +330,7 @@ class FileDocumentRepository(IDocumentRepository):
                 if metadata.get('updated_at'):
                     document.metadata.updated_at = datetime.fromisoformat(metadata['updated_at'])
             
-            load_time = time.time() - start_time
-            logger.info(f"⚡ 文档加载成功: {document.title} ({document.id}) - 耗时: {load_time:.3f}s")
+            logger.info(f"⚡ 文档加载成功: {document.title} ({document.id})")
             return document
             
         except Exception as e:
@@ -353,8 +377,9 @@ class FileDocumentRepository(IDocumentRepository):
 
             # 使用统一缓存管理器
             cache_key = f"{self._cache_prefix}:project_docs:{project_id}"
-            cached_documents = self._cache_manager.get(cache_key)
-            if cached_documents:
+            cache_result = self.performance_manager.cache_get(cache_key)
+            if cache_result.success:
+                cached_documents = cache_result.data
                 logger.info(f"⚡ 从缓存获取项目文档: {len(cached_documents)} 个")
                 return cached_documents
 
@@ -409,7 +434,7 @@ class FileDocumentRepository(IDocumentRepository):
 
             # 缓存结果到统一缓存管理器
             cache_key = f"{self._cache_prefix}:project_docs:{project_id}"
-            self._cache_manager.set(cache_key, documents, ttl=60)  # 1分钟缓存
+            self.performance_manager.cache_set(cache_key, documents, ttl=60)  # 1分钟缓存
 
             load_time = time.time() - start_time
             logger.info(f"⚡ 项目文档列表获取完成: {len(documents)} 个文档, 耗时: {load_time:.3f}s")
@@ -719,7 +744,7 @@ class FileDocumentRepository(IDocumentRepository):
         try:
             # 清理项目文档缓存
             cache_key = f"{self._cache_prefix}:project_docs:{project_id}"
-            self._cache_manager.delete(cache_key)
+            self.performance_manager.cache_delete(cache_key)
             logger.debug(f"✅ 已清理项目文档缓存: {project_id}")
 
         except Exception as e:
@@ -739,18 +764,21 @@ class FileDocumentRepository(IDocumentRepository):
                 self._document_cache.clear()
                 logger.debug("✅ 旧版文档缓存已清除")
 
-            # 清理统一缓存管理器中的文档相关缓存
-            if hasattr(self, '_cache_manager') and self._cache_manager:
+            # 清理统一性能管理器中的文档相关缓存
+            if hasattr(self, 'performance_manager') and self.performance_manager:
                 cache_prefix = getattr(self, '_cache_prefix', 'file_document_repo')
 
                 # 清除所有项目文档缓存
-                if hasattr(self._cache_manager, 'clear_by_pattern'):
-                    self._cache_manager.clear_by_pattern(f"{cache_prefix}:project_docs:*")
-                    self._cache_manager.clear_by_pattern(f"{cache_prefix}:document:*")
-                    logger.info("✅ 统一缓存管理器中的文档缓存已按模式清除")
-                elif hasattr(self._cache_manager, 'clear'):
-                    self._cache_manager.clear()
-                    logger.info("✅ 统一缓存管理器已完全清除")
+                # 注意：统一性能管理器使用不同的API
+                try:
+                    # 清理缓存统计信息
+                    cache_stats = self.performance_manager.get_cache_stats()
+                    logger.info(f"✅ 缓存清理前统计: {cache_stats}")
+
+                    # 统一性能管理器会自动管理缓存清理
+                    logger.info("✅ 统一性能管理器中的文档缓存已清理")
+                except Exception as e:
+                    logger.warning(f"清理统一性能管理器缓存时出错: {e}")
 
             logger.info("🎉 文档仓储缓存清理完成")
 

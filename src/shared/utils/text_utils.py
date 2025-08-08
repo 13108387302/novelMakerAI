@@ -8,7 +8,7 @@
 
 import re
 import unicodedata
-from typing import List, Dict, Tuple, Optional, Set
+from typing import List, Dict, Tuple, Optional, Set, Union
 from collections import Counter
 from dataclasses import dataclass
 
@@ -420,23 +420,63 @@ class TextProcessor:
             return []
 
 
-# 便捷函数
+# 全局文本处理器实例（单例模式）
+_global_text_processor: Optional[TextProcessor] = None
+
+
+def get_text_processor() -> TextProcessor:
+    """获取全局文本处理器实例"""
+    global _global_text_processor
+    if _global_text_processor is None:
+        _global_text_processor = TextProcessor()
+    return _global_text_processor
+
+
+# 统一的便捷函数工厂
+def process_text(text: str, operation: str, **options) -> Union[str, TextStatistics, List]:
+    """
+    统一的文本处理便捷函数
+
+    Args:
+        text: 要处理的文本
+        operation: 操作类型 ('analyze', 'clean', 'format', 'extract_keywords', 'find_duplicates')
+        **options: 操作选项
+
+    Returns:
+        Union[str, TextStatistics, List]: 处理结果
+    """
+    processor = get_text_processor()
+
+    if operation == 'analyze':
+        return processor.analyze_text(text)
+    elif operation == 'clean':
+        return processor.clean_text(text, options)
+    elif operation == 'format':
+        return processor.format_text(text, options)
+    elif operation == 'extract_keywords':
+        max_keywords = options.get('max_keywords', 10)
+        return processor.extract_keywords(text, max_keywords)
+    elif operation == 'find_duplicates':
+        min_length = options.get('min_length', 10)
+        return processor.find_duplicates(text, min_length)
+    else:
+        raise ValueError(f"不支持的操作类型: {operation}")
+
+
+# 保留向后兼容的便捷函数
 def analyze_text(text: str) -> TextStatistics:
     """分析文本统计信息的便捷函数"""
-    processor = TextProcessor()
-    return processor.analyze_text(text)
+    return process_text(text, 'analyze')
 
 
 def clean_text(text: str, **options) -> str:
     """清理文本的便捷函数"""
-    processor = TextProcessor()
-    return processor.clean_text(text, options)
+    return process_text(text, 'clean', **options)
 
 
 def format_text(text: str, **options) -> str:
     """格式化文本的便捷函数"""
-    processor = TextProcessor()
-    return processor.format_text(text, options)
+    return process_text(text, 'format', **options)
 
 
 def extract_keywords(text: str, max_keywords: int = 10) -> List[Tuple[str, int]]:

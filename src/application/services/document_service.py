@@ -17,6 +17,7 @@ from src.domain.events.document_events import (
 )
 from src.shared.events.event_bus import EventBus
 from src.shared.utils.logger import get_logger
+from src.shared.utils.operation_templates import OperationTemplate, ValidationTemplate
 from src.shared.constants import DEFAULT_RECENT_DOCUMENTS_LIMIT
 
 if TYPE_CHECKING:
@@ -68,7 +69,29 @@ class DocumentService:
         self.search_service = search_service
         self._open_documents: Dict[str, Document] = {}
         self._current_document_id: Optional[str] = None
-    
+
+        # 创建操作模板
+        self._document_operation_template = OperationTemplate[str, bool]("文档操作")
+        self._document_operation_template.add_validator(
+            lambda doc_id: ValidationTemplate.validate_string_length(doc_id, 1),
+            "文档ID不能为空"
+        )
+
+    async def _publish_event_safe(self, event, operation_name: str) -> None:
+        """安全发布事件，统一处理异常"""
+        try:
+            await self.event_bus.publish_async(event)
+            logger.debug(f"{operation_name}事件发布成功")
+        except Exception as e:
+            logger.warning(f"发布{operation_name}事件失败: {e}")
+
+    def _validate_document_open(self, document_id: str) -> bool:
+        """验证文档是否已打开"""
+        if document_id not in self._open_documents:
+            logger.warning(f"文档未打开: {document_id}")
+            return False
+        return True
+
     async def create_document(
         self,
         title: str,
@@ -125,12 +148,7 @@ class DocumentService:
                     document_type=document_type,
                     project_id=project_id
                 )
-                try:
-                    logger.info(f"📢 发布文档创建事件: {document.title} (ID: {document.id})")
-                    await self.event_bus.publish_async(event)
-                    logger.info(f"✅ 文档创建事件发布成功: {document.title}")
-                except Exception as e:
-                    logger.warning(f"发布文档创建事件失败: {e}")
+                await self._publish_event_safe(event, "文档创建")
 
                 logger.info(f"🎉 文档创建完成: {title} ({document.id})")
                 return document
@@ -165,10 +183,7 @@ class DocumentService:
                     document_title=document.title,
                     project_id=document.project_id
                 )
-                try:
-                    await self.event_bus.publish_async(event)
-                except Exception as e:
-                    logger.warning(f"发布文档打开事件失败: {e}")
+                await self._publish_event_safe(event, "文档打开")
                 
                 logger.info(f"文档打开成功: {document.title} ({document.id})")
                 return document
@@ -204,10 +219,7 @@ class DocumentService:
                     document_id=document.id,
                     document_title=document.title
                 )
-                try:
-                    await self.event_bus.publish_async(event)
-                except Exception as e:
-                    logger.warning(f"发布文档关闭事件失败: {e}")
+                await self._publish_event_safe(event, "文档关闭")
                 
                 logger.info(f"文档关闭: {document.title}")
                 return True
@@ -222,29 +234,28 @@ class DocumentService:
     async def save_document(self, document_id: str) -> bool:
         """保存文档"""
         try:
-            if document_id in self._open_documents:
-                document = self._open_documents[document_id]
-                
-                success = await self.document_repository.save(document)
-                if success:
-                    # 发布文档保存事件
-                    event = DocumentSavedEvent(
-                        document_id=document.id,
-                        document_title=document.title,
-                        word_count=document.statistics.word_count,
-                        character_count=document.statistics.character_count
-                    )
-                    await self.event_bus.publish_async(event)
-                    
-                    logger.info(f"文档保存成功: {document.title}")
-                    return True
-                else:
-                    logger.error(f"文档保存失败: {document.title}")
-                    return False
-            else:
-                logger.warning(f"文档未打开: {document_id}")
+            if not self._validate_document_open(document_id):
                 return False
-                
+
+            document = self._open_documents[document_id]
+
+            success = await self.document_repository.save(document)
+            if success:
+                # 发布文档保存事件
+                event = DocumentSavedEvent(
+                    document_id=document.id,
+                    document_title=document.title,
+                    word_count=document.statistics.word_count,
+                    character_count=document.statistics.character_count
+                )
+                await self._publish_event_safe(event, "文档保存")
+
+                logger.info(f"文档保存成功: {document.title}")
+                return True
+            else:
+                logger.error(f"文档保存失败: {document.title}")
+                return False
+
         except Exception as e:
             logger.error(f"保存文档失败: {e}")
             return False
@@ -268,7 +279,7 @@ class DocumentService:
                     word_count=document.statistics.word_count,
                     character_count=document.statistics.character_count
                 )
-                await self.event_bus.publish_async(event)
+                await self._publish_event_safe(event, "文档保存")
 
                 logger.info(f"文档对象保存成功: {document.title}")
                 return True
@@ -309,27 +320,26 @@ class DocumentService:
     async def update_document_content(self, document_id: str, content: str) -> bool:
         """更新文档内容"""
         try:
-            if document_id in self._open_documents:
-                document = self._open_documents[document_id]
-                old_content = document.content
-                
-                # 更新内容
-                document.content = content
-                
-                # 发布内容变更事件
-                event = DocumentContentChangedEvent(
-                    document_id=document.id,
-                    old_content=old_content,
-                    new_content=content
-                )
-                await self.event_bus.publish_async(event)
-                
-                logger.debug(f"文档内容更新: {document.title}")
-                return True
-            else:
-                logger.warning(f"文档未打开: {document_id}")
+            if not self._validate_document_open(document_id):
                 return False
-                
+
+            document = self._open_documents[document_id]
+            old_content = document.content
+
+            # 更新内容
+            document.content = content
+
+            # 发布内容变更事件
+            event = DocumentContentChangedEvent(
+                document_id=document.id,
+                old_content=old_content,
+                new_content=content
+            )
+            await self._publish_event_safe(event, "文档内容变更")
+
+            logger.debug(f"文档内容更新: {document.title}")
+            return True
+
         except Exception as e:
             logger.error(f"更新文档内容失败: {e}")
             return False

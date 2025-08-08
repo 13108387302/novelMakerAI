@@ -105,6 +105,13 @@ from src.domain.entities.project import ProjectType, Project
 from src.domain.entities.document import DocumentType
 from src.domain.events.document_events import DocumentCreatedEvent, DocumentSavedEvent
 from src.shared.utils.logger import get_logger
+from src.shared.utils.error_handler import controller_error_handler, async_controller_error_handler
+from src.shared.utils.async_manager import get_async_manager, async_task
+from src.shared.constants import (
+    UI_IMMEDIATE_DELAY, UI_SHORT_DELAY, UI_MEDIUM_DELAY, UI_LONG_DELAY,
+    ASYNC_SHORT_TIMEOUT, ASYNC_MEDIUM_TIMEOUT, ASYNC_LONG_TIMEOUT,
+    ERROR_MESSAGE_MAX_LENGTH
+)
 
 logger = get_logger(__name__)
 
@@ -190,18 +197,13 @@ class MainController(QObject):
         # 创建线程安全的回调发射器
         self.callback_emitter = ThreadSafeCallbackEmitter()
 
-        # 异步任务管理
-        self._active_tasks = set()  # 跟踪活跃的异步任务
+        # 使用统一的异步任务管理器
+        self.async_manager = get_async_manager()
+
+        # 任务状态管理
         self._creating_documents = set()  # 正在创建的文档标题集合（防重复创建）
         self._opening_documents = set()  # 正在打开的文档ID集合（防重复打开）
         self._last_open_time = {}  # 最后打开时间记录
-
-        # 初始化线程池以提高性能
-        import concurrent.futures
-        self._thread_pool = concurrent.futures.ThreadPoolExecutor(
-            max_workers=4,
-            thread_name_prefix="AsyncTask"
-        )
 
         # 对话框
         self._find_replace_dialog: Optional[FindReplaceDialog] = None
@@ -256,14 +258,15 @@ class MainController(QObject):
         except Exception as e:
             logger.error(f"❌ 设置事件监听失败: {e}")
 
+    @controller_error_handler("清理资源", show_user_error=False)
     def cleanup(self):
         """清理资源"""
-        try:
-            if hasattr(self, '_thread_pool'):
-                self._thread_pool.shutdown(wait=False)
-                logger.info("线程池已关闭")
-        except Exception as e:
-            logger.error(f"清理资源失败: {e}")
+        # 取消所有活跃的异步任务
+        if hasattr(self, 'async_manager'):
+            cancelled_count = self.async_manager.cancel_all_tasks()
+            logger.info(f"已取消 {cancelled_count} 个异步任务")
+
+        logger.info("控制器资源清理完成")
 
     def set_main_window(self, main_window: 'MainWindow') -> None:
         """设置主窗口引用"""
@@ -274,61 +277,18 @@ class MainController(QObject):
             self._status_service = main_window.status_service
             logger.info("状态服务引用已设置")
 
-    def _run_async_task(self, coro, success_callback=None, error_callback=None):
-        """通用的异步任务执行器（优化版本，使用线程池）"""
+    def _run_async_task(self, coro, success_callback=None, error_callback=None, timeout=None):
+        """通用的异步任务执行器（使用统一的异步管理器）"""
         try:
-            import asyncio
-            import time
-
-            start_time = time.time()
-
-            def run_in_thread():
-                loop = None
-                try:
-                    # 在线程池线程中创建新的事件循环
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-
-                    logger.debug("⚡ 开始执行异步协程")
-                    result = loop.run_until_complete(coro)
-                    execution_time = time.time() - start_time
-                    logger.debug(f"⚡ 异步协程执行完成，耗时: {execution_time:.3f}s")
-
-                    # 使用线程安全的方式执行回调
-                    if success_callback:
-                        logger.debug("准备执行成功回调")
-                        self._safe_callback(lambda res=result: success_callback(res))
-                        logger.debug("成功回调已调度")
-                    else:
-                        logger.debug("没有成功回调")
-
-                except Exception as e:
-                    logger.error(f"异步协程执行失败: {e}")
-                    # 使用线程安全的方式执行错误回调
-                    if error_callback:
-                        self._safe_callback(lambda error=e: error_callback(error))
-                    else:
-                        self._safe_callback(lambda error=e: logger.error(f"异步任务执行失败: {error}"))
-                finally:
-                    # 确保事件循环正确关闭
-                    if loop and not loop.is_closed():
-                        try:
-                            # 取消所有未完成的任务
-                            pending = asyncio.all_tasks(loop)
-                            for task in pending:
-                                task.cancel()
-
-                            # 等待任务取消完成
-                            if pending:
-                                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-                        except Exception as cleanup_error:
-                            logger.warning(f"清理异步任务时出错: {cleanup_error}")
-                        finally:
-                            loop.close()
-
-            # 使用线程池执行，减少线程创建开销
-            future = self._thread_pool.submit(run_in_thread)
-            # 不等待完成，让任务在后台运行
+            # 使用统一的异步管理器执行任务
+            task_id = self.async_manager.execute_async(
+                coro=coro,
+                success_callback=success_callback,
+                error_callback=error_callback,
+                timeout=timeout or ASYNC_MEDIUM_TIMEOUT
+            )
+            logger.debug(f"异步任务已提交: {task_id}")
+            return task_id
 
         except Exception as e:
             logger.error(f"启动异步任务失败: {e}")
@@ -340,27 +300,16 @@ class MainController(QObject):
     def _safe_callback(self, callback):
         """线程安全的回调执行"""
         try:
-            logger.info("开始执行安全回调")
-            # 检查是否在主线程中
-            from src.shared.utils.thread_safety import is_main_thread
-            if is_main_thread():
-                logger.info("在主线程中，直接执行回调")
-                # 直接执行
-                callback()
-            else:
-                logger.info("不在主线程中，使用信号槽机制切换到主线程")
-                # 使用信号槽机制切换到主线程
-                self.callback_emitter.emit_callback(callback)
-
+            # 使用异步管理器的回调信号确保线程安全
+            self.async_manager.callback_signal.emit(callback)
         except Exception as e:
             logger.error(f"安全回调执行失败: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-            # 尝试直接执行
+            # 尝试直接执行作为备用
             try:
-                callback()
+                from PyQt6.QtCore import QTimer
+                QTimer.singleShot(0, callback)
             except Exception as e2:
-                logger.error(f"直接回调执行也失败: {e2}")
+                logger.error(f"备用回调执行也失败: {e2}")
 
     def _connect_signals(self, main_window):
         """连接信号"""
@@ -371,70 +320,53 @@ class MainController(QObject):
         self.status_message.connect(main_window.show_message)
         self.progress_updated.connect(main_window.show_progress)
 
-    def cleanup(self):
-        """清理资源"""
-        try:
-            # 取消所有活跃的异步任务
-            for task in self._active_tasks.copy():
-                if not task.done():
-                    task.cancel()
-                    logger.debug(f"取消异步任务: {task}")
-
-            self._active_tasks.clear()
-            logger.info("控制器资源清理完成")
-
-        except Exception as e:
-            logger.error(f"控制器资源清理失败: {e}")
+    # 移除重复的cleanup方法定义
     
     # ========================================================================
     # 项目管理
     # ========================================================================
     
+    @controller_error_handler("新建项目")
     def new_project(self) -> None:
         """新建项目"""
-        try:
-            # 创建项目向导
-            if not self._project_wizard:
-                from src.presentation.dialogs.project_wizard import ProjectWizard
-                self._project_wizard = ProjectWizard(self._main_window)
-                self._project_wizard.project_created.connect(self._on_project_wizard_completed)
+        # 创建项目向导
+        if not self._project_wizard:
+            from src.presentation.dialogs.project_wizard import ProjectWizard
+            self._project_wizard = ProjectWizard(self._main_window)
+            self._project_wizard.project_created.connect(self._on_project_wizard_completed)
 
-            # 显示向导
-            result = self._project_wizard.exec()
-            if result == self._project_wizard.DialogCode.Accepted:
-                logger.info("项目创建向导完成")
+        # 显示向导
+        result = self._project_wizard.exec()
+        if result == self._project_wizard.DialogCode.Accepted:
+            logger.info("项目创建向导完成")
 
-        except Exception as e:
-            logger.error(f"新建项目失败: {e}")
-            self._show_error("新建项目失败", str(e))
-
+    @controller_error_handler("新建文档")
     def new_document(self) -> None:
         """新建文档"""
-        try:
-            logger.info("🔧 new_document() 方法被调用")
+        logger.info("🔧 new_document() 方法被调用")
 
-            if not self.project_service.has_current_project:
-                self._show_warning("新建文档", "请先打开一个项目")
-                return
+        if not self.project_service.has_current_project:
+            self._show_warning("新建文档", "请先打开一个项目")
+            return
 
-            # 使用输入对话框获取文档标题
-            from PyQt6.QtWidgets import QInputDialog
-            title, ok = QInputDialog.getText(
-                self._main_window,
-                "新建文档",
-                "请输入文档标题:",
-                text="新文档"
+        # 使用输入对话框获取文档标题
+        from PyQt6.QtWidgets import QInputDialog
+        title, ok = QInputDialog.getText(
+            self._main_window,
+            "新建文档",
+            "请输入文档标题:",
+            text="新文档"
+        )
+
+        if ok and title.strip():
+            logger.info(f"📝 用户确认创建新文档: {title.strip()}")
+            self.async_manager.execute_delayed(
+                self._run_async_new_document,
+                UI_IMMEDIATE_DELAY,
+                title.strip()
             )
-
-            if ok and title.strip():
-                logger.info(f"📝 用户确认创建新文档: {title.strip()}")
-                QTimer.singleShot(0, lambda: self._run_async_new_document(title.strip()))
-            else:
-                logger.info("❌ 用户取消创建新文档")
-
-        except Exception as e:
-            logger.error(f"新建文档失败: {e}")
-            self._show_error("新建文档失败", str(e))
+        else:
+            logger.info("❌ 用户取消创建新文档")
 
 
 
@@ -459,75 +391,75 @@ class MainController(QObject):
             logger.error(f"同步新建文档失败: {e}")
             self._show_error("新建文档失败", str(e))
 
+    @async_controller_error_handler("新建文档", log_traceback=True)
     async def _new_document_async(self, title: str) -> None:
         """异步新建文档"""
+        # 检查是否正在创建同名文档
+        if title in self._creating_documents:
+            logger.warning(f"文档 '{title}' 正在创建中，跳过重复创建")
+            return
+
+        # 添加到创建中列表
+        self._creating_documents.add(title)
+
         try:
-            # 检查是否正在创建同名文档
-            if title in self._creating_documents:
-                logger.warning(f"文档 '{title}' 正在创建中，跳过重复创建")
+            current_project = self.project_service.current_project
+            if not current_project:
                 return
 
-            # 添加到创建中列表
-            self._creating_documents.add(title)
+            # 创建新文档
+            document = await self.document_service.create_document(
+                title=title,
+                content="",
+                project_id=current_project.id,
+                document_type=DocumentType.CHAPTER
+            )
 
-            try:
-                current_project = self.project_service.current_project
-                if not current_project:
-                    return
+            if document:
+                logger.info(f"文档创建成功: {document.title}")
+                self.status_message.emit(f"文档 '{document.title}' 创建成功")
 
-                # 创建新文档
-                document = await self.document_service.create_document(
-                    title=title,
-                    content="",
-                    project_id=current_project.id,
-                    document_type=DocumentType.CHAPTER
+                # 延迟打开新创建的文档
+                self.async_manager.execute_delayed(
+                    self._safe_open_document,
+                    UI_MEDIUM_DELAY,
+                    document.id
                 )
+            else:
+                self._show_error("新建文档失败", "无法创建文档")
 
-                if document:
-                    logger.info(f"文档创建成功: {document.title}")
-                    self.status_message.emit(f"文档 '{document.title}' 创建成功")
-
-                    # 项目树刷新将通过信号处理，这里不重复刷新
-
-                    # 延迟打开新创建的文档
-                    from PyQt6.QtCore import QTimer
-                    QTimer.singleShot(500, lambda: self._safe_open_document(document.id))
-                else:
-                    self._show_error("新建文档失败", "无法创建文档")
-
-            finally:
-                # 从创建中列表移除
-                self._creating_documents.discard(title)
-
-        except Exception as e:
-            logger.error(f"异步新建文档失败: {e}")
-            self._show_error("新建文档失败", str(e))
-            # 确保从创建中列表移除
+        finally:
+            # 从创建中列表移除
             self._creating_documents.discard(title)
 
+    @controller_error_handler("删除文档", show_user_error=False)
     def delete_document(self, document_id: str) -> None:
         """删除文档"""
-        try:
-            QTimer.singleShot(0, lambda: self._run_async_delete_document(document_id))
-        except Exception as e:
-            logger.error(f"删除文档失败: {e}")
+        self.async_manager.execute_delayed(
+            self._run_async_delete_document,
+            UI_IMMEDIATE_DELAY,
+            document_id
+        )
 
+    @controller_error_handler("重命名文档")
     def rename_document(self, document_id: str, new_title: str) -> None:
         """重命名文档"""
-        try:
-            QTimer.singleShot(0, lambda: self._run_async_rename_document(document_id, new_title))
-        except Exception as e:
-            logger.error(f"重命名文档失败: {e}")
-            self._show_error("重命名文档失败", str(e))
+        self.async_manager.execute_delayed(
+            self._run_async_rename_document,
+            UI_IMMEDIATE_DELAY,
+            document_id,
+            new_title
+        )
 
+    @controller_error_handler("复制文档")
     def copy_document(self, document_id: str, new_title: str) -> None:
         """复制文档"""
-        try:
-            QTimer.singleShot(0, lambda: self._run_async_copy_document(document_id, new_title))
-        except Exception as e:
-            logger.error(f"复制文档失败: {e}")
-            self._show_error("复制文档失败", str(e))
-            self._show_error("删除文档失败", str(e))
+        self.async_manager.execute_delayed(
+            self._run_async_copy_document,
+            UI_IMMEDIATE_DELAY,
+            document_id,
+            new_title
+        )
 
     def _run_async_delete_document(self, document_id: str):
         """运行异步删除文档操作"""
@@ -733,20 +665,16 @@ class MainController(QObject):
                 logger.warning(f"跳过重复创建")
                 return None
 
-            # 检查是否已存在相同标题的文档
+            # 检查是否已存在相同标题的文档（仅警告，不阻止创建）
             try:
                 existing_docs = await self.document_service.list_documents_by_project(project_id)
                 for doc in existing_docs:
                     if doc.title == title and doc.document_type.value == document_type:
                         logger.warning(f"已存在相同标题的文档: '{title}' ({document_type})")
-                        # 在主线程中显示警告
-                        from PyQt6.QtCore import QMetaObject, Qt
-                        QMetaObject.invokeMethod(
-                            self._main_window,
-                            lambda: self._show_warning("创建文档", f"已存在标题为 '{title}' 的{document_type}"),
-                            Qt.ConnectionType.QueuedConnection
-                        )
-                        return None
+                        # 在主线程中显示警告，但不阻止创建
+                        from PyQt6.QtCore import QTimer
+                        QTimer.singleShot(0, lambda: self._show_warning("创建文档", f"已存在标题为 '{title}' 的{document_type}，将创建新的文档"))
+                        break  # 只显示一次警告
             except Exception as e:
                 logger.warning(f"检查现有文档失败: {e}")
 
@@ -1019,57 +947,55 @@ class MainController(QObject):
             logger.error(f"创建新项目失败: {e}")
             self._show_error("错误", f"创建项目失败: {e}")
 
+    @controller_error_handler("保存当前文档", log_traceback=True)
     def save_current_document(self) -> None:
         """保存当前文档"""
         logger.info("🔄 Ctrl+S 保存功能被调用")
-        try:
-            # 获取当前编辑器中的文档
-            if hasattr(self.main_window, 'editor_widget') and self.main_window.editor_widget:
-                logger.debug("✅ 编辑器组件存在")
 
-                # 使用新的方法获取当前文档
-                current_document = self.main_window.editor_widget.get_current_document()
-                if current_document:
-                    logger.info(f"✅ 找到当前文档: {current_document.title} (ID: {current_document.id})")
+        # 检查编辑器是否可用
+        if not (hasattr(self.main_window, 'editor_widget') and self.main_window.editor_widget):
+            self._show_warning("提示", "编辑器未初始化")
+            logger.warning("❌ 尝试保存文档，但编辑器未初始化")
+            return
 
-                    # 获取编辑器内容
-                    content = self.main_window.editor_widget.get_content()
-                    logger.debug(f"✅ 获取编辑器内容: {len(content)} 字符")
+        logger.debug("✅ 编辑器组件存在")
 
-                    # 更新文档内容
-                    old_content = current_document.content
-                    current_document.content = content
+        # 获取当前文档
+        current_document = self.main_window.editor_widget.get_current_document()
+        if not current_document:
+            self._show_warning("提示", "没有打开的文档")
+            logger.warning("❌ 尝试保存文档，但没有打开的文档")
+            return
 
-                    # 更新文档统计信息
-                    current_document.statistics.update_from_content(content)
+        logger.info(f"✅ 找到当前文档: {current_document.title} (ID: {current_document.id})")
 
-                    # 更新修改时间
-                    from datetime import datetime
-                    current_document.updated_at = datetime.now()
+        # 准备文档数据
+        content = self.main_window.editor_widget.get_content()
+        old_content = current_document.content
 
-                    logger.info(f"📝 准备保存文档: {current_document.title}")
-                    logger.info(f"   - 字数: {current_document.statistics.word_count}")
-                    logger.info(f"   - 内容变化: {len(old_content)} -> {len(content)} 字符")
+        # 更新文档
+        self._update_document_for_save(current_document, content)
 
-                    # 异步保存
-                    document_title = current_document.title  # 捕获标题，避免闭包问题
-                    self._run_async_task(
-                        self._save_document_async(current_document),
-                        success_callback=lambda result, title=document_title: self._on_save_success(title),
-                        error_callback=lambda e, title=document_title: self._on_save_error(title, e)
-                    )
-                else:
-                    self._show_warning("提示", "没有打开的文档")
-                    logger.warning("❌ 尝试保存文档，但没有打开的文档")
-            else:
-                self._show_warning("提示", "编辑器未初始化")
-                logger.warning("❌ 尝试保存文档，但编辑器未初始化")
+        logger.info(f"📝 准备保存文档: {current_document.title}")
+        logger.info(f"   - 字数: {current_document.statistics.word_count}")
+        logger.info(f"   - 内容变化: {len(old_content)} -> {len(content)} 字符")
 
-        except Exception as e:
-            logger.error(f"❌ 保存当前文档失败: {e}")
-            import traceback
-            logger.error(f"详细错误: {traceback.format_exc()}")
-            self._show_error("错误", f"保存文档失败: {e}")
+        # 异步保存
+        document_title = current_document.title  # 捕获标题，避免闭包问题
+        self.async_manager.execute_async(
+            self._save_document_async(current_document),
+            success_callback=lambda result: self._on_save_success(document_title),
+            error_callback=lambda e: self._on_save_error(document_title, e),
+            timeout=ASYNC_MEDIUM_TIMEOUT
+        )
+
+    def _update_document_for_save(self, document, content: str) -> None:
+        """更新文档以准备保存"""
+        document.content = content
+        document.statistics.update_from_content(content)
+
+        from datetime import datetime
+        document.updated_at = datetime.now()
 
     def _on_save_success(self, document_title: str):
         """保存成功回调"""
@@ -2025,10 +1951,7 @@ class MainController(QObject):
     # 辅助方法
     # ========================================================================
     
-    def _show_error(self, title: str, message: str) -> None:
-        """显示错误消息"""
-        if self._main_window:
-            QMessageBox.critical(self._main_window, title, message)
+    # 移除重复的_show_error方法定义，使用后面的线程安全版本
     
     def _show_warning(self, title: str, message: str) -> None:
         """显示警告消息"""
@@ -2724,22 +2647,24 @@ class MainController(QObject):
             import traceback
             logger.error(traceback.format_exc())
 
-    def _run_async_save_before_exit(self):
-        """运行异步退出前保存操作"""
-        self._run_async_task(
-            self._save_before_exit(),
-            success_callback=lambda _: logger.info("退出前保存完成"),
-            error_callback=lambda e: logger.error(f"异步退出前保存失败: {e}")
-        )
+    # 移除重复的_run_async_save_before_exit方法定义
 
     def _show_error(self, title: str, message: str):
         """显示错误消息（线程安全）"""
         try:
+            # 限制错误消息长度
+            if len(message) > ERROR_MESSAGE_MAX_LENGTH:
+                message = message[:ERROR_MESSAGE_MAX_LENGTH] + "..."
+
             # 确保在主线程中显示错误消息
             from src.shared.utils.thread_safety import is_main_thread
             if not is_main_thread():
-                from PyQt6.QtCore import QTimer
-                QTimer.singleShot(0, lambda: self._show_error(title, message))
+                self.async_manager.execute_delayed(
+                    self._show_error,
+                    UI_IMMEDIATE_DELAY,
+                    title,
+                    message
+                )
                 return
 
             from PyQt6.QtWidgets import QMessageBox
@@ -2777,74 +2702,51 @@ class MainController(QObject):
     # 编辑操作方法
     # ========================================================================
 
+    @controller_error_handler("撤销操作", show_user_error=False)
     def undo(self) -> None:
         """撤销操作"""
-        try:
-            if hasattr(self._main_window, 'editor_widget') and self._main_window.editor_widget:
-                if hasattr(self._main_window.editor_widget, 'undo'):
-                    self._main_window.editor_widget.undo()
-                else:
-                    logger.warning("编辑器不支持撤销操作")
-        except Exception as e:
-            logger.error(f"撤销操作失败: {e}")
+        self._execute_editor_operation('undo', "撤销")
 
+    @controller_error_handler("重做操作", show_user_error=False)
     def redo(self) -> None:
         """重做操作"""
-        try:
-            if hasattr(self._main_window, 'editor_widget') and self._main_window.editor_widget:
-                if hasattr(self._main_window.editor_widget, 'redo'):
-                    self._main_window.editor_widget.redo()
-                else:
-                    logger.warning("编辑器不支持重做操作")
-        except Exception as e:
-            logger.error(f"重做操作失败: {e}")
+        self._execute_editor_operation('redo', "重做")
 
+    @controller_error_handler("剪切操作", show_user_error=False)
     def cut(self) -> None:
         """剪切操作"""
-        try:
-            if hasattr(self._main_window, 'editor_widget') and self._main_window.editor_widget:
-                if hasattr(self._main_window.editor_widget, 'cut'):
-                    self._main_window.editor_widget.cut()
-                else:
-                    logger.warning("编辑器不支持剪切操作")
-        except Exception as e:
-            logger.error(f"剪切操作失败: {e}")
+        self._execute_editor_operation('cut', "剪切")
 
+    @controller_error_handler("复制操作", show_user_error=False)
     def copy(self) -> None:
         """复制操作"""
-        try:
-            if hasattr(self._main_window, 'editor_widget') and self._main_window.editor_widget:
-                if hasattr(self._main_window.editor_widget, 'copy'):
-                    self._main_window.editor_widget.copy()
-                else:
-                    logger.warning("编辑器不支持复制操作")
-        except Exception as e:
-            logger.error(f"复制操作失败: {e}")
+        self._execute_editor_operation('copy', "复制")
 
+    @controller_error_handler("粘贴操作", show_user_error=False)
     def paste(self) -> None:
         """粘贴操作"""
-        try:
-            if hasattr(self._main_window, 'editor_widget') and self._main_window.editor_widget:
-                if hasattr(self._main_window.editor_widget, 'paste'):
-                    self._main_window.editor_widget.paste()
-                else:
-                    logger.warning("编辑器不支持粘贴操作")
-        except Exception as e:
-            logger.error(f"粘贴操作失败: {e}")
+        self._execute_editor_operation('paste', "粘贴")
 
+    @controller_error_handler("查找操作")
     def find(self) -> None:
         """查找操作"""
-        try:
-            self.show_find_dialog()
-        except Exception as e:
-            logger.error(f"查找操作失败: {e}")
+        self.show_find_dialog()
 
+    @controller_error_handler("替换操作")
     def replace(self) -> None:
         """替换操作"""
-        try:
-            self.show_replace_dialog()
-        except Exception as e:
-            logger.error(f"替换操作失败: {e}")
+        self.show_replace_dialog()
+
+    def _execute_editor_operation(self, operation: str, operation_name: str) -> None:
+        """执行编辑器操作的通用方法"""
+        if not (hasattr(self._main_window, 'editor_widget') and self._main_window.editor_widget):
+            logger.warning(f"编辑器不可用，无法执行{operation_name}操作")
+            return
+
+        if hasattr(self._main_window.editor_widget, operation):
+            getattr(self._main_window.editor_widget, operation)()
+        else:
+            logger.warning(f"编辑器不支持{operation_name}操作")
 
     # ========================================================================
     # 视图操作方法

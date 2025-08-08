@@ -81,6 +81,9 @@ class GlobalAIPanel(ModernAIWidget):
         # 创建功能区域（重新设计）
         self._create_modern_functions_section(content_layout)
 
+        # 创建聊天界面
+        self._create_chat_section(content_layout)
+
         # 创建输出区域
         self._create_modern_output_section(content_layout)
 
@@ -128,6 +131,21 @@ class GlobalAIPanel(ModernAIWidget):
         functions_group.setLayout(functions_layout)
         parent_layout.addWidget(functions_group)
 
+    def _create_chat_section(self, parent_layout):
+        """创建聊天区域"""
+        # 创建聊天组框
+        chat_group = self.create_group_box("💬 AI智能对话")
+        chat_layout = QVBoxLayout()
+        chat_layout.setContentsMargins(12, 12, 12, 12)
+        chat_layout.setSpacing(8)
+
+        # 创建聊天界面
+        chat_interface = self.create_chat_interface()
+        chat_layout.addWidget(chat_interface)
+
+        chat_group.setLayout(chat_layout)
+        parent_layout.addWidget(chat_group)
+
     def _create_modern_output_section(self, parent_layout):
         """创建现代化输出区域"""
         output_group = self.create_group_box("💭 AI响应")
@@ -174,22 +192,27 @@ class GlobalAIPanel(ModernAIWidget):
 
     def _on_global_chat(self):
         """处理全局对话"""
-        # 切换到输入标签页并聚焦
-        self.show_status("准备AI对话...", "info")
+        # 如果有聊天界面，聚焦到输入框
+        if hasattr(self, 'chat_input'):
+            self.chat_input.setFocus()
+            self.show_status("请在下方输入框中输入您的问题", "info")
+        else:
+            # 回退到原有方式
+            self.show_status("准备AI对话...", "info")
 
-        # 构建对话提示
-        prompt = "你好！我是你的AI写作助手，有什么可以帮助你的吗？"
-        if self.document_context:
-            prompt = f"基于当前文档内容，我可以为你提供写作建议。当前文档内容：\n\n{self.document_context[:500]}...\n\n有什么可以帮助你的吗？"
+            # 构建对话提示
+            prompt = "你好！我是你的AI写作助手，有什么可以帮助你的吗？"
+            if self.document_context:
+                prompt = f"基于当前文档内容，我可以为你提供写作建议。当前文档内容：\n\n{self.document_context[:500]}...\n\n有什么可以帮助你的吗？"
 
-        options = {
-            'function_id': 'global_chat',
-            'execution_mode': 'INTERACTIVE',
-            'context': self.document_context,
-            'selected_text': self.selected_text
-        }
+            options = {
+                'function_id': 'global_chat',
+                'execution_mode': 'INTERACTIVE',
+                'context': self.document_context,
+                'selected_text': self.selected_text
+            }
 
-        self.execute_ai_request("ai_chat", prompt, options)
+            self.execute_ai_request("ai_chat", prompt, options)
 
     def _on_global_translate(self):
         """处理全局翻译"""

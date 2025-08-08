@@ -731,6 +731,104 @@ async def safe_execute_async(func: Callable, *args: Any, context: str = "", defa
         return default_return
 
 
+def controller_error_handler(
+    operation_name: str = "",
+    show_user_error: bool = True,
+    default_return: Any = None,
+    log_traceback: bool = False
+):
+    """
+    控制器错误处理装饰器
+
+    统一处理控制器方法中的异常，减少重复的错误处理代码。
+
+    Args:
+        operation_name: 操作名称，用于错误消息
+        show_user_error: 是否向用户显示错误消息
+        default_return: 异常时的默认返回值
+        log_traceback: 是否记录详细的堆栈跟踪
+
+    Returns:
+        装饰器函数
+    """
+    def decorator(func: Callable) -> Callable:
+        @wraps(func)
+        def wrapper(self, *args, **kwargs):
+            try:
+                return func(self, *args, **kwargs)
+            except Exception as e:
+                # 获取操作名称
+                op_name = operation_name or func.__name__.replace('_', ' ').title()
+
+                # 记录错误日志
+                logger = get_logger(func.__module__)
+                logger.error(f"{op_name}失败: {e}")
+
+                # 记录详细堆栈跟踪（如果需要）
+                if log_traceback:
+                    import traceback
+                    logger.error(f"详细错误: {traceback.format_exc()}")
+
+                # 向用户显示错误（如果需要且有显示方法）
+                if show_user_error and hasattr(self, '_show_error'):
+                    self._show_error(f"{op_name}失败", str(e))
+
+                return default_return
+        return wrapper
+    return decorator
+
+
+def async_controller_error_handler(
+    operation_name: str = "",
+    show_user_error: bool = True,
+    default_return: Any = None,
+    log_traceback: bool = False
+):
+    """
+    异步控制器错误处理装饰器
+
+    统一处理异步控制器方法中的异常。
+
+    Args:
+        operation_name: 操作名称，用于错误消息
+        show_user_error: 是否向用户显示错误消息
+        default_return: 异常时的默认返回值
+        log_traceback: 是否记录详细的堆栈跟踪
+
+    Returns:
+        装饰器函数
+    """
+    def decorator(func: Callable) -> Callable:
+        @wraps(func)
+        async def wrapper(self, *args, **kwargs):
+            try:
+                return await func(self, *args, **kwargs)
+            except Exception as e:
+                # 获取操作名称
+                op_name = operation_name or func.__name__.replace('_', ' ').title()
+
+                # 记录错误日志
+                logger = get_logger(func.__module__)
+                logger.error(f"{op_name}失败: {e}")
+
+                # 记录详细堆栈跟踪（如果需要）
+                if log_traceback:
+                    import traceback
+                    logger.error(f"详细错误: {traceback.format_exc()}")
+
+                # 向用户显示错误（如果需要且有显示方法）
+                if show_user_error and hasattr(self, '_show_error'):
+                    # 确保在主线程中显示错误
+                    from src.shared.utils.thread_safety import ensure_main_thread_execution
+                    ensure_main_thread_execution(
+                        lambda: self._show_error(f"{op_name}失败", str(e))
+                    )
+
+                return default_return
+        return wrapper
+    return decorator
+
+
 # 便捷函数
 def raise_validation_error(message: str, field: Optional[str] = None, details: Optional[str] = None):
     """抛出验证错误"""

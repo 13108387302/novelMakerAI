@@ -232,22 +232,19 @@ class EventBus:
         """发布事件（同步）"""
         if not self._is_running:
             return
-        
-        logger.debug(f"发布事件: {event.__class__.__name__} (ID: {event.event_id})")
-        
+
         # 添加到事件队列
         try:
             asyncio.create_task(self._event_queue.put(event))
         except RuntimeError:
             # 如果没有事件循环，直接处理
             asyncio.run(self._process_event(event))
-    
+
     async def publish_async(self, event: Event) -> None:
         """发布事件（异步）"""
         if not self._is_running:
             return
-        
-        logger.debug(f"异步发布事件: {event.__class__.__name__} (ID: {event.event_id})")
+
         await self._event_queue.put(event)
     
     def _start_processing(self) -> None:
@@ -279,9 +276,6 @@ class EventBus:
             subscriptions = self._subscriptions.get(event_type, []).copy()
         
         if not subscriptions:
-            # 只有在调试模式下才记录这个信息，因为没有订阅者是正常情况
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(f"没有找到事件 {event_type.__name__} 的订阅者")
             return
         
         # 处理所有订阅

@@ -1,23 +1,56 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-工具包
+工具包 - 重构版本
 
-提供各种通用的工具函数和类，包括文本处理、文件操作、日志记录、
-错误处理、线程安全、性能监控和数据验证等功能。
+提供统一的工具函数和类，采用新的架构设计确保一致性和可维护性。
 
 主要模块：
+- base_utils: 工具类基础架构和统一接口
+- unified_performance: 统一性能监控和缓存管理
+- unified_error_handler: 统一错误处理机制
 - text_utils: 文本处理和分析工具
 - file_utils: 文件和目录操作工具
 - logger: 日志记录工具
-- error_handler: 错误处理工具
 - thread_safety: 线程安全工具
-- validators: 数据验证工具
-- performance_monitor: 性能监控工具
+
+重构改进：
+- 统一的工具类接口设计
+- 整合的性能监控和缓存管理
+- 简化的错误处理机制
+- 更好的模块化和可扩展性
 """
 
-# 导入常用的工具函数和类
+# 导入新的统一工具类和向后兼容的接口
 try:
+    # 新的统一工具类基础架构
+    from .base_utils import (
+        BaseUtility, UtilResult, OperationResult,
+        UtilityRegistry, get_utility_registry, register_utility, get_utility,
+        timed_operation, utility_method
+    )
+
+    # 统一性能监控和缓存管理
+    from .unified_performance import (
+        UnifiedPerformanceManager, get_performance_manager, set_performance_manager,
+        performance_monitor
+    )
+
+    # 统一错误处理
+    from .unified_error_handler import (
+        UnifiedErrorHandler, ErrorSeverity, ErrorCategory, ErrorInfo,
+        get_error_handler, set_error_handler,
+        handle_errors, handle_async_errors, safe_execute
+    )
+
+    # 统一网络管理
+    from .unified_network_manager import (
+        UnifiedNetworkManager, NetworkQuality, NetworkMetrics,
+        get_network_manager, set_network_manager,
+        check_network_connectivity, get_optimal_timeout, retry_with_backoff
+    )
+
+    # 保留的原有工具类（向后兼容）
     # 日志工具
     from .logger import get_logger, setup_logging
 
@@ -33,30 +66,61 @@ try:
         ensure_directory, safe_copy, safe_delete
     )
 
-    # 错误处理工具
-    from .error_handler import (
-        ErrorHandler, ApplicationError, ValidationError,
-        handle_async_errors, safe_execute, safe_execute_async
-    )
-
     # 线程安全工具
     from .thread_safety import (
         ensure_main_thread, ThreadSafeInitializer,
         safe_qt_call, is_main_thread
     )
 
-    # 缓存管理工具
-    from .cache_manager import (
-        CacheManager, get_cache_manager, set_cache_manager
-    )
+    # 向后兼容的缓存管理（使用统一性能管理器）
+    def get_cache_manager():
+        """向后兼容：获取缓存管理器"""
+        return get_performance_manager()
 
-    # 数据验证工具（如果需要可以从其他模块导入）
-    # from .validators import ...  # 已删除，使用内联验证
-
-    # 性能监控工具（如果需要可以从其他模块导入）
-    # from .performance_monitor import ...  # 已删除，使用status_service
+    def set_cache_manager(manager):
+        """向后兼容：设置缓存管理器"""
+        if isinstance(manager, UnifiedPerformanceManager):
+            set_performance_manager(manager)
 
     __all__ = [
+        # 新的统一工具类
+        "BaseUtility",
+        "UtilResult",
+        "OperationResult",
+        "UtilityRegistry",
+        "get_utility_registry",
+        "register_utility",
+        "get_utility",
+        "timed_operation",
+        "utility_method",
+
+        # 统一性能监控
+        "UnifiedPerformanceManager",
+        "get_performance_manager",
+        "set_performance_manager",
+        "performance_monitor",
+
+        # 统一错误处理
+        "UnifiedErrorHandler",
+        "ErrorSeverity",
+        "ErrorCategory",
+        "ErrorInfo",
+        "get_error_handler",
+        "set_error_handler",
+        "handle_errors",
+        "handle_async_errors",
+        "safe_execute",
+
+        # 统一网络管理
+        "UnifiedNetworkManager",
+        "NetworkQuality",
+        "NetworkMetrics",
+        "get_network_manager",
+        "set_network_manager",
+        "check_network_connectivity",
+        "get_optimal_timeout",
+        "retry_with_backoff",
+
         # 日志工具
         "get_logger",
         "setup_logging",
@@ -75,22 +139,13 @@ try:
         "safe_copy",
         "safe_delete",
 
-        # 错误处理
-        "ErrorHandler",
-        "ApplicationError",
-        "ValidationError",
-        "handle_async_errors",
-        "safe_execute",
-        "safe_execute_async",
-
         # 线程安全
         "ensure_main_thread",
         "ThreadSafeInitializer",
         "safe_qt_call",
         "is_main_thread",
 
-        # 缓存管理
-        "CacheManager",
+        # 向后兼容的缓存管理
         "get_cache_manager",
         "set_cache_manager"
     ]

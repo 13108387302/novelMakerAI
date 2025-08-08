@@ -10,7 +10,6 @@ import sys
 import asyncio
 from pathlib import Path
 from typing import Optional
-from functools import wraps
 
 # 添加项目根目录到Python路径
 PROJECT_ROOT = Path(__file__).parent
@@ -18,9 +17,8 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 # 使用标准asyncio，不依赖qasync
 
-from PyQt6.QtWidgets import QApplication, QMessageBox, QSplashScreen
-from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QPixmap, QFont
+from PyQt6.QtWidgets import QApplication, QMessageBox
+from PyQt6.QtCore import QTimer
 
 # 导入重构后的组件
 from src.shared.ioc.container import Container
@@ -56,52 +54,29 @@ except ImportError as e:
             raise RuntimeError("AI服务不可用，请检查AI模块安装")
 
     _new_ai_available = False
+# 保留控制器需要的服务类型导入
 from src.application.services.settings_service import SettingsService
 from src.application.services.search import SearchService
 from src.application.services.import_export_service import ImportExportService
-from src.application.services.backup_service import BackupService
-from src.application.services.template_service import TemplateService
-# 注意：AIAssistantManager 和 SpecializedAIManager 已被新的统一AI服务替代
 from src.application.services.status_service import StatusService
-
-# 导入仓储层
-from src.domain.repositories.project_repository import IProjectRepository
-from src.domain.repositories.document_repository import IDocumentRepository
-from src.domain.repositories.ai_service_repository import IAIServiceRepository
-from src.infrastructure.repositories.file_project_repository import FileProjectRepository
-from src.infrastructure.repositories.file_document_repository import FileDocumentRepository
-from src.infrastructure.repositories.ai_service_repository import AIServiceRepository
 
 # 导入配置
 from config.settings import Settings
 
 # 导入线程安全工具
 from src.shared.utils.thread_safety import is_main_thread
+from src.shared.utils.error_handler import handle_errors
+from src.shared.constants import (
+    UI_MEDIUM_DELAY, UI_LONG_DELAY, ASYNC_MEDIUM_TIMEOUT,
+    APP_NAME, APP_VERSION, APP_ORGANIZATION
+)
+from src.shared.utils.service_registry import ServiceRegistryFactory
+from src.shared.utils.splash_factory import create_splash_and_execute_steps
 
 logger = get_logger(__name__)
 
 
-def handle_initialization_error(operation_name: str):
-    """
-    初始化操作异常处理装饰器
-
-    用于统一处理初始化过程中的异常，减少重复的异常处理代码。
-
-    Args:
-        operation_name: 操作名称，用于日志记录
-    """
-    def decorator(func):
-        @wraps(func)
-        def wrapper(self, *args, **kwargs):
-            try:
-                result = func(self, *args, **kwargs)
-                logger.info(f"{operation_name}完成")
-                return result
-            except Exception as e:
-                logger.error(f"{operation_name}失败: {e}")
-                return False
-        return wrapper
-    return decorator
+# 使用统一的错误处理装饰器，移除重复的装饰器定义
 
 
 class AINovelEditorApp:
@@ -138,11 +113,6 @@ class AINovelEditorApp:
 
         创建应用程序实例并初始化所有核心组件的引用。
         所有组件都设置为None，将在initialize()方法中进行实际初始化。
-
-        实现方式：
-        - 使用Optional类型注解确保类型安全
-        - 延迟初始化模式，避免构造函数中的复杂逻辑
-        - 记录初始化日志便于调试
         """
         self.app: Optional[QApplication] = None
         self.container: Optional[Container] = None
@@ -157,6 +127,10 @@ class AINovelEditorApp:
 
         # AI服务初始化标志
         self._ai_services_need_initialization: bool = False
+
+        # 事件循环管理
+        self._event_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._is_shutting_down: bool = False
 
         logger.info("AI小说编辑器应用程序初始化")
 
@@ -199,7 +173,6 @@ class AINovelEditorApp:
         Note:
             初始化失败时会显示错误对话框并记录详细日志
         """
-        splash = None
         try:
             logger.info("🚀 启动AI小说编辑器 2.0")
 
@@ -208,118 +181,24 @@ class AINovelEditorApp:
 
             # 创建Qt应用
             self.app = QApplication(sys.argv)
-            self.app.setApplicationName("AI小说编辑器 2.0")
-            self.app.setApplicationVersion("2.0.0")
-            self.app.setOrganizationName("AI小说编辑器团队")
+            self.app.setApplicationName(APP_NAME)
+            self.app.setApplicationVersion(APP_VERSION)
+            self.app.setOrganizationName(APP_ORGANIZATION)
 
-            # 显示启动画面
-            splash = self._create_splash_screen()
-            splash.show()
-            self.app.processEvents()
-
-            # 初始化核心组件
-            splash.showMessage("初始化核心组件...", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignCenter)
-            self.app.processEvents()
-
-            if not self._initialize_core_components():
+            # 使用启动画面工厂执行初始化
+            success = create_splash_and_execute_steps(self.app, self)
+            if not success:
                 return False
-
-            # 注册依赖
-            splash.showMessage("注册服务依赖...", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignCenter)
-            self.app.processEvents()
-
-            if not self._register_dependencies():
-                return False
-
-            # 初始化服务
-            splash.showMessage("初始化应用服务...", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignCenter)
-            self.app.processEvents()
-
-            if not self._initialize_services():
-                return False
-
-            # 创建UI
-            splash.showMessage("创建用户界面...", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignCenter)
-            self.app.processEvents()
-
-            if not self._create_ui():
-                return False
-
-            # 应用主题
-            splash.showMessage("应用主题样式...", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignCenter)
-            self.app.processEvents()
-
-            self._apply_theme()
-
-            # 设置事件循环
-            splash.showMessage("设置异步事件循环...", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignCenter)
-            self.app.processEvents()
-
-            self._setup_async_loop()
-
-            # 完成初始化
-            splash.showMessage("启动完成！", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignCenter)
-            self.app.processEvents()
-
-            # 延迟关闭启动画面
-            QTimer.singleShot(1000, splash.close)
 
             logger.info("✅ 应用程序初始化完成")
             return True
 
         except Exception as e:
             logger.error(f"❌ 应用程序初始化失败: {e}")
-            # 确保启动画面被关闭
-            if splash:
-                try:
-                    splash.close()
-                except Exception:
-                    pass
             self._show_error("初始化失败", f"应用程序初始化失败：{e}")
             return False
-    
-    def _create_splash_screen(self) -> QSplashScreen:
-        """
-        创建应用程序启动画面
 
-        创建一个简单的启动画面，在应用程序初始化过程中向用户显示进度信息。
-        启动画面会保持在最顶层，无边框设计，提供现代化的用户体验。
-
-        实现方式：
-        - 创建400x300像素的白色背景图像
-        - 设置窗口标志保持在最顶层且无边框
-        - 使用Microsoft YaHei UI字体提供良好的中文显示效果
-        - 居中显示应用程序名称和启动状态
-
-        Returns:
-            QSplashScreen: 配置好的启动画面实例
-
-        Note:
-            启动画面会在初始化完成后通过定时器自动关闭
-        """
-        # 确保在主线程中创建UI组件
-        self._ensure_main_thread()
-
-        # 创建简单的启动画面
-        pixmap = QPixmap(400, 300)
-        pixmap.fill(Qt.GlobalColor.white)
-
-        splash = QSplashScreen(pixmap)
-        splash.setWindowFlags(Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.FramelessWindowHint)
-
-        # 设置字体
-        font = QFont("Microsoft YaHei UI", 12)
-        splash.setFont(font)
-
-        splash.showMessage(
-            "🤖 AI小说编辑器 2.0\n\n正在启动...",
-            Qt.AlignmentFlag.AlignCenter,
-            Qt.GlobalColor.black
-        )
-
-        return splash
-
-    @handle_initialization_error("核心组件初始化")
+    @handle_errors("核心组件初始化", show_dialog=False)
     def _initialize_core_components(self) -> bool:
         """
         初始化应用程序的核心组件
@@ -363,170 +242,56 @@ class AINovelEditorApp:
 
         return True
     
-    @handle_initialization_error("依赖注册")
+    @handle_errors("依赖注册", show_dialog=False)
     def _register_dependencies(self) -> bool:
         """
         注册依赖注入容器中的所有依赖关系
 
-        配置依赖注入容器，注册所有服务、仓储和组件的依赖关系。
-        使用单例模式确保核心组件的唯一性，使用工厂函数创建复杂对象。
-
-        实现方式：
-        - 注册核心组件为单例（Settings、EventBus、ThemeManager等）
-        - 注册仓储接口与具体实现的映射关系
-        - 注册应用服务及其依赖关系
-        - 使用lambda表达式延迟创建对象
-        - 确保依赖关系的正确注入顺序
+        使用服务注册工厂统一管理依赖注册，减少重复代码。
 
         Returns:
             bool: 注册成功返回True，失败返回False
-
-        Note:
-            依赖注册失败会导致后续服务无法正常创建和使用
         """
-        # 注册单例
+        # 创建服务注册工厂
+        registry = ServiceRegistryFactory(self.container, self.settings, self.event_bus)
+
+        # 注册核心单例组件
+        self._register_core_singletons()
+
+        # 使用工厂批量注册服务
+        registry.register_repositories_batch()
+        registry.register_core_services_batch()
+        registry.register_additional_services_batch()
+
+        # 注册AI服务并检查是否需要初始化
+        self._ai_services_need_initialization = registry.register_ai_services_batch(_new_ai_available)
+
+        # 注册控制器
+        self._register_controllers()
+
+        # 初始化AI服务（如果需要）
+        if self._ai_services_need_initialization:
+            logger.info("依赖注册完成，开始初始化AI服务...")
+            self._initialize_ai_services_sync()
+            self._ai_services_need_initialization = False
+
+        return True
+
+    def _register_core_singletons(self) -> None:
+        """注册核心单例组件"""
         self.container.register_singleton(Settings, lambda: self.settings)
         self.container.register_singleton(EventBus, lambda: self.event_bus)
         self.container.register_singleton(ThemeManager, lambda: self.theme_manager)
 
-        # 注册仓储
-        self.container.register_singleton(
-            IProjectRepository,
-            lambda: FileProjectRepository(self.settings.data_dir / "projects")
-        )
-        self.container.register_singleton(
-            IDocumentRepository,
-            lambda: FileDocumentRepository(self.settings.data_dir / "documents")
-        )
-        self.container.register_singleton(
-            IAIServiceRepository,
-            lambda: AIServiceRepository(self.settings)
-        )
+    # 移除重复的服务注册方法，已由ServiceRegistryFactory统一处理
 
-        # 注册应用服务
-        self.container.register_singleton(
-            ApplicationService,
-            lambda: ApplicationService(self.container, self.event_bus, self.settings)
-        )
-        self.container.register_singleton(
-            ProjectService,
-            lambda: ProjectService(
-                project_repository=self.container.get(IProjectRepository),
-                event_bus=self.event_bus
-            )
-        )
-
-        # 先注册SearchService，因为DocumentService依赖它
-        self.container.register_singleton(
-            SearchService,
-            lambda: SearchService(
-                project_repository=self.container.get(IProjectRepository),
-                document_repository=self.container.get(IDocumentRepository),
-                event_bus=self.event_bus,
-                index_path=self.settings.data_dir / "search_index.db"
-            )
-        )
-
-        self.container.register_singleton(
-            DocumentService,
-            lambda: DocumentService(
-                document_repository=self.container.get(IDocumentRepository),
-                event_bus=self.event_bus,
-                search_service=self.container.get(SearchService)
-            )
-        )
-        # 注册AI服务（支持新旧架构）
-        if _new_ai_available:
-            # 使用新的重构架构
-            def create_ai_orchestration_service():
-                # 获取设置服务
-                settings_service = self.container.get(SettingsService)
-
-                # 配置AI编排服务
-                config = {
-                    'providers': {
-                        'openai': {
-                            'api_key': settings_service.get_setting('ai.openai_api_key', ''),
-                            'base_url': settings_service.get_setting('ai.openai_base_url', 'https://api.openai.com/v1'),
-                            'default_model': settings_service.get_setting('ai.openai_model', 'gpt-3.5-turbo')
-                        },
-                        'deepseek': {
-                            'api_key': settings_service.get_setting('ai.deepseek_api_key', ''),
-                            'base_url': settings_service.get_setting('ai.deepseek_base_url', 'https://api.deepseek.com/v1'),
-                            'default_model': settings_service.get_setting('ai.deepseek_model', 'deepseek-chat')
-                        }
-                    },
-                    'default_provider': settings_service.get_setting('ai.default_provider', 'deepseek'),
-                    'max_concurrent_requests': settings_service.get_setting('ai.max_concurrent_requests', 10),
-                    'request_timeout': settings_service.get_setting('ai.request_timeout', 30.0)
-                }
-                return AIOrchestrationService(config)
-
-            def create_ai_intelligence_service():
-                service = AIIntelligenceService()
-                service.initialize()
-                return service
-
-            # 注册新架构服务
-            self.container.register_singleton(AIOrchestrationService, create_ai_orchestration_service)
-            self.container.register_singleton(AIIntelligenceService, create_ai_intelligence_service)
-
-            # 为向后兼容，也注册一个AIService别名
-            self.container.register_singleton('AIService', create_ai_orchestration_service)
-
-            # 标记需要初始化AI服务
-            self._ai_services_need_initialization = True
-        else:
-            # 使用占位符AI服务
-            def create_ai_service():
-                return AIService()
-            self.container.register_singleton(AIService, create_ai_service)
-        self.container.register_singleton(
-            SettingsService,
-            lambda: SettingsService(self.settings, self.event_bus)
-        )
-        self.container.register_singleton(
-            ImportExportService,
-            lambda: ImportExportService(
-                project_repository=self.container.get(IProjectRepository),
-                document_repository=self.container.get(IDocumentRepository),
-                event_bus=self.event_bus
-            )
-        )
-
-        # 注册备份服务
-        self.container.register_singleton(
-            BackupService,
-            lambda: BackupService(
-                project_repository=self.container.get(IProjectRepository),
-                document_repository=self.container.get(IDocumentRepository),
-                backup_dir=self.settings.data_dir / "backups"
-            )
-        )
-
-        # 注册模板服务
-        self.container.register_singleton(
-            TemplateService,
-            lambda: TemplateService(
-                templates_dir=self.settings.data_dir / "templates"
-            )
-        )
-
-        # 注意：专属AI管理器已被统一AI服务替代
-
-        # 注册状态服务
-        self.container.register_singleton(
-            StatusService,
-            lambda: StatusService()
-        )
-
-        # 注册控制器（手动解析依赖）
+    def _register_controllers(self) -> None:
+        """注册控制器层组件"""
         def create_main_controller():
             # 根据可用的AI架构选择服务
-            if _new_ai_available:
-                ai_service = self.container.get(AIOrchestrationService)
-            else:
-                ai_service = self.container.get(AIService)
+            ai_service = (self.container.get(AIOrchestrationService)
+                         if _new_ai_available
+                         else self.container.get('AIService'))
 
             return MainController(
                 app_service=self.container.get(ApplicationService),
@@ -536,21 +301,12 @@ class AINovelEditorApp:
                 settings_service=self.container.get(SettingsService),
                 search_service=self.container.get(SearchService),
                 import_export_service=self.container.get(ImportExportService),
-                # ai_assistant_manager 已被统一AI服务替代
                 status_service=self.container.get(StatusService)
             )
 
         self.container.register_singleton(MainController, create_main_controller)
-
-        # 在依赖注册完成后初始化AI服务
-        if self._ai_services_need_initialization:
-            logger.info("依赖注册完成，开始初始化AI服务...")
-            self._initialize_ai_services_sync()
-            self._ai_services_need_initialization = False
-
-        return True
     
-    @handle_initialization_error("应用服务初始化")
+    @handle_errors("应用服务初始化", show_dialog=False)
     def _initialize_services(self) -> bool:
         """初始化服务"""
         # 获取应用服务
@@ -563,7 +319,7 @@ class AINovelEditorApp:
 
         return True
     
-    @handle_initialization_error("用户界面创建")
+    @handle_errors("用户界面创建", show_dialog=False)
     def _create_ui(self) -> bool:
         """创建用户界面"""
         # 确保在主线程中执行
@@ -683,11 +439,15 @@ class AINovelEditorApp:
     
     def _setup_async_loop(self):
         """设置异步事件循环"""
+        if self._is_shutting_down:
+            return
+
         try:
             # 检查是否已有事件循环
             try:
                 existing_loop = asyncio.get_event_loop()
                 if existing_loop and not existing_loop.is_closed():
+                    self._event_loop = existing_loop
                     logger.debug("使用现有的异步事件循环")
                     return
             except RuntimeError:
@@ -695,13 +455,16 @@ class AINovelEditorApp:
                 pass
 
             # 创建基础事件循环
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+            if self._event_loop is None or self._event_loop.is_closed():
+                self._event_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(self._event_loop)
+                logger.debug("创建新的异步事件循环")
 
             logger.debug("异步事件循环设置完成")
 
         except Exception as e:
             logger.error(f"设置异步事件循环失败: {e}")
+            self._event_loop = None
 
     def _initialize_ai_services_sync(self):
         """同步初始化AI服务"""
@@ -732,31 +495,8 @@ class AINovelEditorApp:
                     logger.error(f"❌ 获取提供商配置失败: {e}")
                     return
 
-                # 使用同步方式初始化，添加超时
-                import asyncio
-
-                # 创建新的事件循环来运行异步初始化
-                logger.info("🔧 创建事件循环...")
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-
-                try:
-                    logger.info("🔧 开始异步初始化...")
-                    # 添加超时，避免卡死（增加到30秒）
-                    result = loop.run_until_complete(
-                        asyncio.wait_for(ai_orchestration.initialize(), timeout=30.0)
-                    )
-                    if result:
-                        logger.info("✅ AI编排服务同步初始化完成")
-                    else:
-                        logger.error("❌ AI编排服务初始化返回False")
-                except asyncio.TimeoutError:
-                    logger.error("❌ AI服务初始化超时（5秒）")
-                except Exception as e:
-                    logger.error(f"❌ AI服务异步初始化失败: {e}")
-                finally:
-                    logger.info("🔧 关闭事件循环...")
-                    loop.close()
+                # 使用独立事件循环进行初始化
+                self._run_ai_initialization_with_timeout(ai_orchestration)
 
             else:
                 logger.warning("⚠️ AI编排服务未找到")
@@ -766,77 +506,47 @@ class AINovelEditorApp:
             import traceback
             logger.error(f"❌ 异常详情: {traceback.format_exc()}")
 
-    def _initialize_ai_services_async(self):
-        """异步初始化AI服务"""
-        logger.debug(f"检查AI服务初始化标志: {hasattr(self, '_ai_services_need_initialization')}")
-        if hasattr(self, '_ai_services_need_initialization'):
-            logger.debug(f"AI服务初始化标志值: {self._ai_services_need_initialization}")
-
-        if not hasattr(self, '_ai_services_need_initialization') or not self._ai_services_need_initialization:
-            logger.debug("跳过AI服务初始化：标志未设置或为False")
+    def _run_ai_initialization_with_timeout(self, ai_orchestration):
+        """在独立事件循环中运行AI初始化"""
+        if self._is_shutting_down:
             return
 
+        temp_loop = None
         try:
-            logger.info("🔄 调度AI服务异步初始化...")
-            # 使用QTimer延迟执行，确保事件循环已经运行
-            QTimer.singleShot(100, self._do_ai_services_initialization)
-        except Exception as e:
-            logger.error(f"调度AI服务初始化失败: {e}")
+            # 使用临时事件循环避免干扰主循环
+            temp_loop = asyncio.new_event_loop()
 
-    def _do_ai_services_initialization(self):
-        """执行AI服务初始化"""
-        logger.info("🚀 开始执行AI服务初始化...")
-        try:
-            import asyncio
+            logger.info("🔧 开始异步初始化...")
+            # 统一超时时间为30秒
+            result = temp_loop.run_until_complete(
+                asyncio.wait_for(ai_orchestration.initialize(), timeout=ASYNC_MEDIUM_TIMEOUT)
+            )
 
-            async def initialize_ai_services():
-                try:
-                    logger.info("🔍 获取AI编排服务...")
-                    ai_orchestration = self.container.get(AIOrchestrationService)
-                    if ai_orchestration:
-                        logger.info("🔧 开始初始化AI编排服务...")
-                        logger.info(f"🔧 AI服务配置: {ai_orchestration.config}")
-                        logger.info(f"🔧 提供商配置: {list(ai_orchestration.providers_config.keys())}")
-
-                        result = await ai_orchestration.initialize()
-                        if result:
-                            logger.info("✅ AI编排服务异步初始化完成")
-                        else:
-                            logger.error("❌ AI编排服务初始化返回False")
-                    else:
-                        logger.warning("⚠️ AI编排服务未找到")
-                except Exception as e:
-                    logger.error(f"❌ AI服务异步初始化失败: {e}")
-                    import traceback
-                    logger.error(f"❌ 异常详情: {traceback.format_exc()}")
-
-            # 创建任务
-            try:
-                loop = asyncio.get_event_loop()
-                logger.debug(f"获取到事件循环: {loop}, 是否关闭: {loop.is_closed()}")
-            except RuntimeError as e:
-                logger.warning(f"获取事件循环失败: {e}")
-                loop = None
-
-            if loop and not loop.is_closed():
-                logger.info("📋 创建AI服务初始化任务...")
-                task = loop.create_task(initialize_ai_services())
-                self._ai_services_need_initialization = False
-                logger.info("✅ AI服务初始化任务已创建")
-
-                # 添加任务完成回调
-                def on_task_complete(task):
-                    if task.exception():
-                        logger.error(f"❌ AI服务初始化任务失败: {task.exception()}")
-                    else:
-                        logger.info("✅ AI服务初始化任务完成")
-
-                task.add_done_callback(on_task_complete)
+            if result:
+                logger.info("✅ AI编排服务同步初始化完成")
             else:
-                logger.warning("⚠️ 事件循环不可用，跳过AI服务初始化")
+                logger.error("❌ AI编排服务初始化返回False")
 
+        except asyncio.TimeoutError:
+            logger.error(f"❌ AI服务初始化超时（{ASYNC_MEDIUM_TIMEOUT}秒）")
         except Exception as e:
-            logger.error(f"AI服务初始化执行失败: {e}")
+            logger.error(f"❌ AI服务异步初始化失败: {e}")
+        finally:
+            if temp_loop:
+                try:
+                    # 清理临时循环
+                    pending = asyncio.all_tasks(temp_loop)
+                    for task in pending:
+                        if not task.done():
+                            task.cancel()
+                    temp_loop.close()
+                    logger.debug("🔧 临时事件循环已关闭")
+                except Exception as e:
+                    logger.warning(f"关闭临时事件循环失败: {e}")
+
+    # 移除重复的异步初始化方法，统一使用同步初始化
+
+
 
     def _on_theme_changed(self, theme_name: str):
         """主题变更处理"""
@@ -902,7 +612,7 @@ class AINovelEditorApp:
                 return
 
             # 延迟调用，确保界面完全加载
-            QTimer.singleShot(500, self.main_controller.auto_open_last_project)
+            QTimer.singleShot(UI_MEDIUM_DELAY, self.main_controller.auto_open_last_project)
         except Exception as e:
             logger.error(f"自动打开上次项目失败: {e}")
 
@@ -919,7 +629,7 @@ class AINovelEditorApp:
                 return
 
             # 延迟显示欢迎对话框
-            QTimer.singleShot(2000, self._display_welcome_dialog)
+            QTimer.singleShot(UI_LONG_DELAY * 2, self._display_welcome_dialog)
 
         except Exception as e:
             logger.error(f"显示欢迎消息失败: {e}")
@@ -991,6 +701,11 @@ class AINovelEditorApp:
     
     def _cleanup(self):
         """清理资源"""
+        if self._is_shutting_down:
+            return
+
+        self._is_shutting_down = True
+
         try:
             logger.info("清理应用程序资源...")
 
@@ -1056,37 +771,63 @@ class AINovelEditorApp:
                     logger.error(f"关闭应用服务失败: {e}")
 
             # 6. 最后关闭事件循环（确保其他组件已经停止使用）
-            try:
-                loop = asyncio.get_event_loop()
-                if loop and not loop.is_closed():
-                    # 取消所有待处理的任务
-                    pending = asyncio.all_tasks(loop)
-                    if pending:
-                        for task in pending:
-                            if not task.done():
-                                task.cancel()
-                        # 等待任务取消完成，设置超时避免无限等待
-                        try:
-                            loop.run_until_complete(
-                                asyncio.wait_for(
-                                    asyncio.gather(*pending, return_exceptions=True),
-                                    timeout=5.0
-                                )
-                            )
-                        except asyncio.TimeoutError:
-                            logger.warning("等待异步任务取消超时")
-                    loop.close()
-            except RuntimeError as e:
-                # 可能没有事件循环或已经关闭
-                if "no current event loop" not in str(e).lower():
-                    logger.error(f"关闭事件循环失败: {e}")
-            except Exception as e:
-                logger.error(f"关闭事件循环失败: {e}")
+            self._cleanup_event_loop()
 
             logger.info("资源清理完成")
 
         except Exception as e:
             logger.error(f"资源清理失败: {e}")
+
+    def _cleanup_event_loop(self):
+        """清理事件循环"""
+        try:
+            # 优先清理我们管理的事件循环
+            if self._event_loop and not self._event_loop.is_closed():
+                self._cancel_pending_tasks(self._event_loop)
+                self._event_loop.close()
+                self._event_loop = None
+                logger.debug("已清理管理的事件循环")
+                return
+
+            # 如果没有管理的循环，尝试清理当前循环
+            try:
+                current_loop = asyncio.get_event_loop()
+                if current_loop and not current_loop.is_closed():
+                    self._cancel_pending_tasks(current_loop)
+                    current_loop.close()
+                    logger.debug("已清理当前事件循环")
+            except RuntimeError as e:
+                # 可能没有事件循环或已经关闭
+                if "no current event loop" not in str(e).lower():
+                    logger.warning(f"获取当前事件循环失败: {e}")
+
+        except Exception as e:
+            logger.error(f"清理事件循环失败: {e}")
+
+    def _cancel_pending_tasks(self, loop):
+        """取消事件循环中的待处理任务"""
+        try:
+            pending = asyncio.all_tasks(loop)
+            if pending:
+                logger.debug(f"取消 {len(pending)} 个待处理任务")
+                for task in pending:
+                    if not task.done():
+                        task.cancel()
+
+                # 等待任务取消完成，设置超时避免无限等待
+                try:
+                    loop.run_until_complete(
+                        asyncio.wait_for(
+                            asyncio.gather(*pending, return_exceptions=True),
+                            timeout=5.0
+                        )
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("等待异步任务取消超时")
+                except Exception as e:
+                    logger.warning(f"等待任务取消失败: {e}")
+        except Exception as e:
+            logger.warning(f"取消待处理任务失败: {e}")
 
 
 def main() -> int:

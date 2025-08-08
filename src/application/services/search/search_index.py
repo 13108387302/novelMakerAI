@@ -17,6 +17,7 @@ from collections import defaultdict, Counter
 from .search_models import SearchResult, SearchMatch, IndexStatus, IndexException
 from src.domain.entities.document import Document
 from src.shared.utils.logger import get_logger
+from src.shared.utils.unified_performance import get_performance_manager, performance_monitor
 
 logger = get_logger(__name__)
 
@@ -27,6 +28,7 @@ class SearchIndex:
     def __init__(self, db_path: Path):
         self.db_path = db_path
         self._lock = threading.RLock()
+        self.performance_manager = get_performance_manager()  # 统一性能管理器
         self._ensure_database()
         
     def _ensure_database(self):
@@ -169,23 +171,44 @@ class SearchIndex:
         return words
     
     def _find_word_positions(self, text: str, word: str) -> List[int]:
-        """查找词汇在文本中的位置"""
-        positions = []
-        start = 0
-        word_lower = word.lower()
-        text_lower = text.lower()
-        
-        while True:
-            pos = text_lower.find(word_lower, start)
-            if pos == -1:
-                break
-            positions.append(pos)
-            start = pos + 1
-            
-        return positions
+        """查找词汇在文本中的位置（优化版本）"""
+        # 使用对象池获取位置列表
+        from src.shared.utils.object_pool import acquire_object, release_object
+
+        positions = acquire_object('list')
+        try:
+            word_lower = word.lower()
+            text_lower = text.lower()
+            word_len = len(word_lower)
+
+            # 使用更高效的搜索算法
+            start = 0
+            while start < len(text_lower):
+                pos = text_lower.find(word_lower, start)
+                if pos == -1:
+                    break
+                positions.append(pos)
+                start = pos + word_len  # 跳过整个词，避免重叠匹配
+
+            # 复制结果并释放池对象
+            result = positions.copy()
+            return result
+
+        finally:
+            release_object('list', positions)
     
+    @performance_monitor("搜索执行")
     def search(self, query: str, limit: int = 100) -> List[Dict[str, Any]]:
-        """搜索文档（优化版本）"""
+        """搜索文档（优化版本，带缓存）"""
+        # 生成缓存键
+        cache_key = f"search:{query.strip().lower()}:{limit}"
+
+        # 尝试从缓存获取结果
+        cache_result = self.performance_manager.cache_get(cache_key)
+        if cache_result.success:
+            logger.debug(f"搜索缓存命中: {query}")
+            return cache_result.data
+
         try:
             with self._lock:
                 with sqlite3.connect(self.db_path) as conn:
@@ -239,7 +262,11 @@ class SearchIndex:
                             'updated_at': row['updated_at']
                         }
                         results.append(result)
-                    
+
+                    # 缓存搜索结果
+                    self.performance_manager.cache_set(cache_key, results, ttl=300)  # 5分钟缓存
+                    logger.debug(f"搜索结果已缓存: {query}")
+
                     return results
                     
         except Exception as e:

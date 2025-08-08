@@ -525,3 +525,93 @@ def register_builtin_functions():
     logger.info(f"智能化程度: {stats['intelligence_percentage']:.1f}%")
     
     return stats
+
+
+@register_ai_function(
+    function_id="enhanced_ai_chat",
+    name="智能对话",
+    description="与AI进行智能对话，支持上下文理解和多轮对话",
+    category=AIFunctionCategory.INTERACTION,
+    execution_mode=AIExecutionMode.INTERACTIVE,
+    icon="💬",
+    tooltip="与AI助手进行智能对话，支持文档上下文理解",
+    min_context_length=0,
+    supports_streaming=True,
+    estimated_time=5,
+    smart_description="智能化对话：理解文档上下文，支持多轮对话记忆"
+)
+class EnhancedAIChatFunction(EnhancedAIIntelligentFunction):
+    """增强AI对话功能 - 支持上下文和对话历史"""
+
+    def can_auto_execute(self, context: str = "", selected_text: str = "") -> bool:
+        """聊天功能总是可以执行"""
+        return True
+
+    def _build_intelligent_prompt(self, input_text: str, context: str, selected_text: str) -> str:
+        """构建智能对话提示词"""
+        # 基础系统提示
+        system_prompt = """你是一个专业的AI写作助手，专门帮助用户进行小说创作。你的特点是：
+
+🎯 核心能力：
+- 深度理解小说创作的各个环节
+- 提供具体、实用、可操作的建议
+- 分析文本结构、人物塑造、情节发展
+- 协助解决创作中的具体问题
+
+💡 交互风格：
+- 友好、耐心、专业
+- 回答简洁明了，重点突出
+- 提供多种解决方案供选择
+- 鼓励创意思维和个性表达
+
+📚 专业领域：
+- 小说结构设计和情节规划
+- 人物性格塑造和对话写作
+- 场景描写和氛围营造
+- 文学技巧和语言润色
+- 创意灵感和写作突破"""
+
+        # 添加文档上下文分析
+        context_info = ""
+        if context and len(context.strip()) > 50:
+            try:
+                # 使用深度分析器分析文档
+                writing_context = self._context_analyzer.analyze_content(context)
+
+                context_info = f"""
+
+📖 当前文档分析：
+- 叙述视角：{writing_context.narrative_voice.value}
+- 情感基调：{writing_context.emotional_tone.value}
+- 场景设定：{writing_context.scene_setting.location}
+- 主要角色：{', '.join(list(writing_context.character_analysis.keys())[:3]) if writing_context.character_analysis else '未识别'}
+- 核心主题：{', '.join(writing_context.themes[:2]) if writing_context.themes else '未识别'}
+
+文档内容摘要：
+{context[:800]}{'...' if len(context) > 800 else ''}"""
+
+            except Exception as e:
+                logger.warning(f"文档分析失败: {e}")
+                context_info = f"""
+
+📖 当前文档内容：
+{context[:500]}{'...' if len(context) > 500 else ''}"""
+
+        # 添加选中文本信息
+        selection_info = ""
+        if selected_text and len(selected_text.strip()) > 10:
+            selection_info = f"""
+
+🎯 用户选中的文本：
+"{selected_text}"
+
+请特别关注用户选中的这段文本，可能与问题相关。"""
+
+        # 构建完整提示
+        full_prompt = f"""{system_prompt}{context_info}{selection_info}
+
+用户问题：{input_text}
+
+请基于以上信息提供专业、有帮助的回答："""
+
+        return full_prompt

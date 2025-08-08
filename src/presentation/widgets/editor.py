@@ -133,13 +133,17 @@ class DocumentTab(QWidget):
 
             logger.info(f"📝 开始优化异步加载: {self.document.title} ({content_length} 字符, {line_count} 行)")
 
-            # 决定加载策略
-            if self.use_virtual_editor:
+            # 使用统一的性能阈值决定加载策略
+            from src.shared.constants import SMALL_DOCUMENT_THRESHOLD, LARGE_DOCUMENT_THRESHOLD
+
+            if self.use_virtual_editor or content_length > LARGE_DOCUMENT_THRESHOLD:
                 # 使用虚拟化编辑器加载大文档
                 self._load_with_virtual_editor(operation_id)
-            elif content_length < 10000:  # 小文档直接同步加载
+            elif content_length < SMALL_DOCUMENT_THRESHOLD:
+                # 小文档直接同步加载
                 self._load_small_document_direct(start_time, operation_id)
-            else:  # 中等文档使用优化的分块加载
+            else:
+                # 中等文档使用优化的分块加载
                 self._load_medium_document_chunked(start_time, operation_id)
 
         except Exception as e:
@@ -773,7 +777,18 @@ class DocumentTab(QWidget):
             # 更新AI面板上下文
             if self.ai_panel:
                 selected_text = self.text_edit.textCursor().selectedText()
-                self.ai_panel.set_context(content, selected_text)
+                cursor_position = self.text_edit.textCursor().position()
+
+                # 使用新的上下文管理方法
+                if hasattr(self.ai_panel, 'update_document_context_external'):
+                    self.ai_panel.update_document_context_external(
+                        document_id=self.document.id,
+                        content=content,
+                        selected_text=selected_text
+                    )
+                else:
+                    # 回退到原有方法
+                    self.ai_panel.set_context(content, selected_text)
 
             # 启动自动保存定时器
             self.auto_save_timer.start(2000)  # 2秒后自动保存
@@ -788,9 +803,19 @@ class DocumentTab(QWidget):
             selected_text = self.text_edit.textCursor().selectedText()
             self.selection_changed.emit(self.document.id, selected_text)
 
-            # 更新AI面板选中文字
-            if self.ai_panel and hasattr(self.ai_panel, 'set_selected_text'):
-                self.ai_panel.set_selected_text(selected_text)
+            # 更新AI面板选中文字和上下文
+            if self.ai_panel:
+                if hasattr(self.ai_panel, 'update_document_context_external'):
+                    # 使用增强的上下文更新方法
+                    content = self.text_edit.toPlainText()
+                    self.ai_panel.update_document_context_external(
+                        document_id=self.document.id,
+                        content=content,
+                        selected_text=selected_text
+                    )
+                elif hasattr(self.ai_panel, 'set_selected_text'):
+                    # 回退到原有方法
+                    self.ai_panel.set_selected_text(selected_text)
 
         except Exception as e:
             logger.error(f"处理选中文字变化失败: {e}")

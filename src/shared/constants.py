@@ -235,6 +235,86 @@ CACHE_EXPIRE_SECONDS = 300             # 缓存过期时间（秒）
 # 版本管理设置
 VERSION_KEEP_COUNT = 20                # 版本保留数量
 
+# UI操作延迟时间（毫秒）
+UI_IMMEDIATE_DELAY = 0                 # 立即执行
+UI_SHORT_DELAY = 100                   # 短延迟
+UI_MEDIUM_DELAY = 500                  # 中等延迟
+UI_LONG_DELAY = 1000                   # 长延迟
+UI_REFRESH_DELAY = 300                 # 刷新延迟
+
+# 异步操作超时时间（秒）
+ASYNC_SHORT_TIMEOUT = 10               # 短操作超时
+ASYNC_MEDIUM_TIMEOUT = 30              # 中等操作超时
+ASYNC_LONG_TIMEOUT = 60                # 长操作超时
+ASYNC_FILE_TIMEOUT = 120               # 文件操作超时
+
+# 线程池配置
+DEFAULT_THREAD_POOL_SIZE = 4           # 默认线程池大小
+MAX_THREAD_POOL_SIZE = 8               # 最大线程池大小
+
+# 错误处理配置
+SHOW_ERROR_TRACEBACK = False           # 是否显示错误堆栈
+ERROR_MESSAGE_MAX_LENGTH = 500         # 错误消息最大长度
+
+# 任务管理配置
+MAX_CONCURRENT_TASKS = 10              # 最大并发任务数
+TASK_CLEANUP_INTERVAL = 300            # 任务清理间隔（秒）
+
+# 性能优化配置
+SMALL_DOCUMENT_THRESHOLD = 10000       # 小文档阈值（字符数）
+LARGE_DOCUMENT_THRESHOLD = 100000      # 大文档阈值（字符数）
+CHUNK_SIZE_SMALL = 1024                # 小块大小（字节）
+CHUNK_SIZE_MEDIUM = 4096               # 中等块大小（字节）
+CHUNK_SIZE_LARGE = 8192                # 大块大小（字节）
+
+# 缓存配置优化
+CACHE_MAX_SIZE = 1000                  # 缓存最大条目数
+CACHE_CLEANUP_THRESHOLD = 0.8          # 缓存清理阈值（80%满时清理）
+OBJECT_POOL_SIZE = 50                  # 对象池大小
+
+# 应用程序配置
+APP_NAME = "AI小说编辑器 2.0"           # 应用程序名称
+APP_VERSION = "2.0.0"                  # 应用程序版本
+APP_ORGANIZATION = "AI小说编辑器团队"    # 组织名称
+
+# 启动画面配置
+SPLASH_WIDTH = 400                     # 启动画面宽度
+SPLASH_HEIGHT = 300                    # 启动画面高度
+SPLASH_FONT_FAMILY = "Microsoft YaHei UI"  # 启动画面字体
+SPLASH_FONT_SIZE = 12                  # 启动画面字体大小
+
+# 数据目录名称
+DIR_PROJECTS = "projects"              # 项目目录
+DIR_DOCUMENTS = "documents"            # 文档目录
+DIR_CHARACTERS = "characters"          # 角色目录
+DIR_WORLDBUILDING = "worldbuilding"    # 世界观目录
+DIR_PLOTS = "plots"                    # 情节目录
+DIR_VERSIONS = "versions"              # 版本目录
+DIR_BACKUPS = "backups"                # 备份目录
+DIR_TEMPLATES = "templates"            # 模板目录
+DIR_SEARCH_INDEX = "search_index.db"   # 搜索索引文件名
+
+# 文本分析常量
+MIN_CONTENT_LENGTH_FOR_SUGGESTIONS = 20    # 建议生成的最小内容长度
+MIN_WORD_COUNT_FOR_SUGGESTIONS = 100       # 建议生成的最小字数
+MAX_WORD_COUNT_FOR_SHORT_CONTENT = 2000    # 短内容的最大字数
+MAX_LINE_LENGTH_THRESHOLD = 100            # 长句子阈值
+MIN_DUPLICATE_LENGTH = 10                  # 重复文本的最小长度
+MAX_SUGGESTION_COUNT = 10                  # 最大建议数量
+
+# 验证常量
+MIN_TITLE_LENGTH = 1                       # 标题最小长度
+MAX_TITLE_LENGTH = 200                     # 标题最大长度
+MIN_DESCRIPTION_LENGTH = 0                 # 描述最小长度
+MAX_DESCRIPTION_LENGTH = 1000              # 描述最大长度
+MIN_CONTENT_LENGTH = 0                     # 内容最小长度
+MAX_CONTENT_LENGTH = 10000000              # 内容最大长度（10MB文本）
+
+# 搜索常量
+DEFAULT_SEARCH_LIMIT = 100                 # 默认搜索结果限制
+MAX_SEARCH_RESULTS = 1000                  # 最大搜索结果数
+SEARCH_CACHE_TTL = 3600                    # 搜索缓存生存时间（秒）
+
 # 安全设置
 MAX_LOGIN_ATTEMPTS = 5                 # 最大登录尝试次数
 SESSION_TIMEOUT = 3600                 # 会话超时时间（秒）

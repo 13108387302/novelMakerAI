@@ -46,6 +46,8 @@ except ImportError:
         def create_task_configs():
             return []
 from src.shared.utils.logger import get_logger
+from src.shared.utils.condition_checker import ConditionChecker
+from src.shared.constants import MIN_CONTENT_LENGTH_FOR_SUGGESTIONS
 
 logger = get_logger(__name__)
 
@@ -398,7 +400,7 @@ class ProjectAnalyzerWidget(QWidget):
             # 处理最后一个段落
             if current_paragraph and in_suggestion_context:
                 paragraph_text = ' '.join(current_paragraph)
-                if len(paragraph_text) > 20:
+                if ConditionChecker.is_valid_string(paragraph_text, MIN_CONTENT_LENGTH_FOR_SUGGESTIONS):
                     suggestions.append(f"• {paragraph_text}")
 
         # 第三步：智能提取（如果前面都没找到）
@@ -408,7 +410,8 @@ class ProjectAnalyzerWidget(QWidget):
 
             for line in lines:
                 line = line.strip()
-                if any(verb in line for verb in action_verbs) and len(line) > 15:
+                if (any(verb in line for verb in action_verbs) and
+                    ConditionChecker.is_valid_string(line, 15)):
                     suggestions.append(f"• {line}")
 
         # 去重和格式化
@@ -417,7 +420,7 @@ class ProjectAnalyzerWidget(QWidget):
         for suggestion in suggestions:
             # 简单的去重逻辑
             key = suggestion.lower().replace('•', '').strip()[:50]
-            if key not in seen and len(key) > 10:
+            if key not in seen and ConditionChecker.is_valid_string(key, 10):
                 seen.add(key)
                 unique_suggestions.append(suggestion)
 
