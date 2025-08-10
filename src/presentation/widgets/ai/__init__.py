@@ -25,12 +25,10 @@ try:
     from .refactored import (
         initialize_ai_component_factory,
         create_intelligent_ai_panel,
-        create_document_ai_panel as _create_document_ai_panel,
-        create_global_ai_panel as _create_global_ai_panel,
         get_ai_widget_factory,
         shutdown_ai_components
     )
-    
+
     # 向后兼容的别名
     def initialize_ai_component_factory_legacy(*args, **kwargs):
         """向后兼容的AI组件工厂初始化函数"""
@@ -41,39 +39,10 @@ try:
         )
         return initialize_ai_component_factory(*args, **kwargs)
 
-    # 兼容性函数
-    def create_document_ai_panel(ai_service, document_id, document_type, parent=None):
-        """创建文档AI面板（兼容性函数）"""
-        warnings.warn(
-            "create_document_ai_panel已弃用，请使用重构版本",
-            DeprecationWarning,
-            stacklevel=2
-        )
-        try:
-            return _create_document_ai_panel(ai_service, document_id, document_type, parent)
-        except Exception as e:
-            print(f"创建文档AI面板失败: {e}")
-            return None
-
-    def create_global_ai_panel(ai_service, parent=None):
-        """创建全局AI面板（兼容性函数）"""
-        warnings.warn(
-            "create_global_ai_panel已弃用，请使用重构版本",
-            DeprecationWarning,
-            stacklevel=2
-        )
-        try:
-            return _create_global_ai_panel(ai_service, parent)
-        except Exception as e:
-            print(f"创建全局AI面板失败: {e}")
-            return None
-    
     __all__ = [
         # 新版本函数
         'initialize_ai_component_factory',
         'create_intelligent_ai_panel',
-        'create_document_ai_panel',
-        'create_global_ai_panel',
         'get_ai_widget_factory',
         'shutdown_ai_components',
 
@@ -83,7 +52,7 @@ try:
         # 兼容性标志和函数
         'NEW_COMPONENTS_AVAILABLE'
     ]
-    
+
 except ImportError as e:
     # 如果重构版本不可用，提供占位符
     warnings.warn(f"重构版本AI组件不可用: {e}", RuntimeWarning)

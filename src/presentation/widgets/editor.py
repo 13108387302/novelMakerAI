@@ -412,57 +412,13 @@ class DocumentTab(QWidget):
         self._load_content_async()
 
     def _setup_ai_panel(self):
-        """设置AI面板"""
-        if not self.ai_assistant:
-            return
-
+        """设置AI面板（已废弃：统一由 MainWindow 的 AI Studio 页面承载）"""
         try:
-            # 尝试使用重构版本的文档AI面板
-            try:
-                from src.presentation.widgets.ai import create_document_ai_panel, NEW_COMPONENTS_AVAILABLE
-                if NEW_COMPONENTS_AVAILABLE and self.ai_assistant:
-                    # 获取统一AI服务
-                    unified_ai_service = getattr(self.ai_assistant, 'ai_service', None)
-                    if hasattr(unified_ai_service, 'unified_ai_service'):
-                        unified_ai_service = unified_ai_service.unified_ai_service
-
-                    if unified_ai_service:
-                        document_type = str(self.document.document_type).split('.')[-1] if hasattr(self.document, 'document_type') else 'chapter'
-                        self.ai_panel = create_document_ai_panel(
-                            unified_ai_service,
-                            self.document.id,
-                            document_type,
-                            self
-                        )
-                        logger.info(f"✅ 重构版文档AI面板创建成功: {self.document.id}")
-                    else:
-                        raise Exception("统一AI服务不可用")
-                else:
-                    raise Exception("新AI组件不可用或AI助手不存在")
-            except Exception as e:
-                logger.error(f"重构版文档AI面板创建失败: {e}")
-                # 创建错误提示面板
-                from PyQt6.QtWidgets import QLabel
-                self.ai_panel = QLabel(f"文档AI面板创建失败: {str(e)}")
-                logger.error(f"❌ 文档AI面板创建失败: {self.document.id}")
-
-            # 连接AI面板信号
-            if hasattr(self.ai_panel, 'text_insert_requested'):
-                self.ai_panel.text_insert_requested.connect(self._insert_ai_text)
-            if hasattr(self.ai_panel, 'text_replace_requested'):
-                self.ai_panel.text_replace_requested.connect(self._replace_ai_text)
-
-            # 添加到分割器
-            if hasattr(self, 'main_splitter'):
-                self.main_splitter.addWidget(self.ai_panel)
-                # 设置分割器比例（编辑器:AI面板 = 3:1）
-                self.main_splitter.setSizes([600, 200])
-                self.main_splitter.setCollapsible(1, True)  # AI面板可折叠
-
-            logger.info(f"为文档 {self.document.id} 设置AI面板完成")
-
-        except Exception as e:
-            logger.error(f"设置AI面板失败: {e}")
+            logger.info("Editor 不再创建或嵌入文档 AI 面板，所有 AI 交互集中到 AI Studio 页面。")
+        except Exception:
+            pass
+        # 直接返回，避免旧逻辑
+        return
 
     def _setup_ai_panel_async(self):
         """异步设置AI面板"""
@@ -581,32 +537,12 @@ class DocumentTab(QWidget):
             unified_ai_service = ai_service
 
             if unified_ai_service:
-                # 创建文档AI面板
-                from src.presentation.widgets.ai import create_document_ai_panel, NEW_COMPONENTS_AVAILABLE
-                if NEW_COMPONENTS_AVAILABLE:
-                    document_type = str(self.document.document_type).split('.')[-1] if hasattr(self.document, 'document_type') else 'chapter'
-                    self.ai_panel = create_document_ai_panel(
-                        unified_ai_service,
-                        self.document.id,
-                        document_type,
-                        self
-                    )
-
-                    # 添加到分割器
-                    if hasattr(self, 'main_splitter'):
-                        self.main_splitter.addWidget(self.ai_panel)
-                        # 设置分割器比例（编辑器:AI面板 = 3:1）
-                        self.main_splitter.setSizes([600, 200])
-                        self.main_splitter.setCollapsible(1, True)  # AI面板可折叠
-
-                    logger.info(f"✅ 统一AI服务文档AI面板创建成功: {self.document.id}")
-                    return True
-                else:
-                    logger.warning("新AI组件不可用")
+                # Editor 不再嵌入文档 AI 面板，统一在 MainWindow 的 AI Studio 页面操作
+                logger.info("统一AI服务可用：由 AI Studio 页面统一承载文档相关功能，不再在 Editor 内嵌面板")
+                return True
             else:
                 logger.warning("无法获取统一AI服务")
-
-            return False
+                return False
 
         except Exception as e:
             logger.error(f"使用统一AI服务创建AI面板失败: {e}")
@@ -641,8 +577,9 @@ class DocumentTab(QWidget):
         except Exception as e:
             logger.error(f"设置AI助手失败: {e}")
 
+    @ensure_main_thread
     def _insert_ai_text(self, text: str, position: int = -1):
-        """插入AI生成的文本"""
+        """插入AI生成的文本（强制主线程）"""
         try:
             cursor = self.text_edit.textCursor()
 
@@ -657,8 +594,9 @@ class DocumentTab(QWidget):
         except Exception as e:
             logger.error(f"插入AI文本失败: {e}")
 
+    @ensure_main_thread
     def _replace_ai_text(self, text: str, start_pos: int = -1, end_pos: int = -1):
-        """替换指定范围或选中的文本为AI生成的文本"""
+        """替换指定范围或选中的文本为AI生成的文本（强制主线程）"""
         try:
             cursor = self.text_edit.textCursor()
 
@@ -680,17 +618,10 @@ class DocumentTab(QWidget):
         except Exception as e:
             logger.error(f"替换AI文本失败: {e}")
 
+    @ensure_main_thread
     def _setup_syntax_highlighting(self):
-        """设置语法高亮"""
+        """设置语法高亮（强制主线程执行）"""
         try:
-            # 检查是否在主线程中
-            from src.shared.utils.thread_safety import is_main_thread
-            if not is_main_thread():
-                logger.warning("语法高亮设置不在主线程中，延迟执行")
-                from PyQt6.QtCore import QTimer
-                QTimer.singleShot(0, self._setup_syntax_highlighting)
-                return
-
             # 根据文档类型选择合适的语法高亮器
             if self.document.type in [DocumentType.CHAPTER, DocumentType.NOTE]:
                 self.syntax_highlighter = NovelSyntaxHighlighter(self.text_edit.document())
@@ -916,27 +847,30 @@ class DocumentTab(QWidget):
         """获取内容"""
         return self.text_edit.toPlainText()
     
+    @ensure_main_thread
     def set_content(self, content: str):
-        """设置内容"""
+        """设置内容（强制主线程）"""
         self.text_edit.setPlainText(content)
         self._update_word_count()
-    
+
+    @ensure_main_thread
     def insert_text(self, text: str):
-        """插入文本"""
+        """插入文本（强制主线程）"""
         cursor = self.text_edit.textCursor()
         cursor.insertText(text)
         self.text_edit.setTextCursor(cursor)
-    
+
     def get_selected_text(self) -> str:
         """获取选中的文本"""
         return self.text_edit.textCursor().selectedText()
     
+    @ensure_main_thread
     def replace_selected_text(self, text: str):
-        """替换选中的文本"""
+        """替换选中的文本（强制主线程）"""
         cursor = self.text_edit.textCursor()
         cursor.insertText(text)
         self.text_edit.setTextCursor(cursor)
-    
+
     def undo(self):
         """撤销"""
         self.text_edit.undo()
@@ -1176,57 +1110,11 @@ class EditorWidget(QWidget):
         project_info.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(project_info)
 
-        # 快速操作按钮
-        buttons_layout = QHBoxLayout()
-        buttons_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        buttons_layout.setSpacing(20)
-
-        # 创建新文档按钮
-        create_doc_btn = QPushButton("📝 创建新文档")
-        create_doc_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #4CAF50;
-                color: white;
-                border: none;
-                padding: 12px 24px;
-                border-radius: 8px;
-                font-size: 12pt;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #45a049;
-            }
-        """)
-        create_doc_btn.clicked.connect(self._on_create_document_clicked)
-        buttons_layout.addWidget(create_doc_btn)
-
-        # 创建模板文档按钮
-        template_btn = QPushButton("📋 使用模板")
-        template_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #2196F3;
-                color: white;
-                border: none;
-                padding: 12px 24px;
-                border-radius: 8px;
-                font-size: 12pt;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #1976D2;
-            }
-        """)
-        template_btn.clicked.connect(self._on_create_template_clicked)
-        buttons_layout.addWidget(template_btn)
-
-        layout.addLayout(buttons_layout)
-
-        # 提示文本
+        # 提示文本（简化，无快速按钮）
         hint_label = QLabel("""
         <div style="text-align: center;">
             <p style="color: #888; font-size: 11pt;">
-                从左侧项目树选择文档开始编辑<br>
-                或使用上方按钮快速创建新内容
+                从左侧项目树选择文档开始编辑
             </p>
         </div>
         """)
@@ -1247,86 +1135,7 @@ class EditorWidget(QWidget):
         welcome_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(welcome_label)
 
-    def _on_create_document_clicked(self):
-        """创建新文档按钮点击"""
-        try:
-            from PyQt6.QtWidgets import QInputDialog
 
-            # 获取文档标题
-            title, ok = QInputDialog.getText(
-                self,
-                "创建新文档",
-                "请输入文档标题:",
-                text="新文档"
-            )
-
-            if ok and title.strip():
-                # 通过信号通知主控制器创建文档
-                self._request_create_document(title.strip())
-
-        except Exception as e:
-            logger.error(f"创建文档请求失败: {e}")
-
-    def _on_create_template_clicked(self):
-        """使用模板按钮点击"""
-        try:
-            from PyQt6.QtWidgets import QInputDialog
-
-            # 模板选项
-            templates = [
-                "长篇小说模板",
-                "短篇小说模板",
-                "剧本模板",
-                "散文模板",
-                "诗歌模板"
-            ]
-
-            template, ok = QInputDialog.getItem(
-                self,
-                "选择模板",
-                "请选择要使用的模板:",
-                templates,
-                0,
-                False
-            )
-
-            if ok and template:
-                # 通过信号通知主控制器创建模板文档
-                self._request_create_template(template)
-
-        except Exception as e:
-            logger.error(f"创建模板请求失败: {e}")
-
-    def _request_create_document(self, title: str):
-        """请求创建文档"""
-        try:
-            # 尝试获取主控制器并创建文档
-            from src.shared.ioc.container import get_global_container
-            container = get_global_container()
-            if container:
-                from src.presentation.controllers.main_controller import MainController
-                main_controller = container.get(MainController)
-                if main_controller:
-                    # 使用主控制器的新建文档方法
-                    main_controller.new_document()
-                    logger.info(f"请求创建文档: {title}")
-                    return
-
-            logger.warning("无法获取主控制器，创建文档请求失败")
-
-        except Exception as e:
-            logger.error(f"请求创建文档失败: {e}")
-
-    def _request_create_template(self, template: str):
-        """请求创建模板文档"""
-        try:
-            # 这里可以扩展为更复杂的模板创建逻辑
-            logger.info(f"请求创建模板文档: {template}")
-            # 暂时使用创建普通文档的方式
-            self._request_create_document("模板文档")
-
-        except Exception as e:
-            logger.error(f"请求创建模板文档失败: {e}")
 
     def _setup_connections(self):
         """设置信号连接"""
@@ -1516,14 +1325,15 @@ class EditorWidget(QWidget):
             return tab.document
         return None
 
+    @ensure_main_thread
     def save_current_document(self):
-        """保存当前文档"""
+        """保存当前文档（强制主线程）"""
         tab = self.get_current_tab()
         if tab:
             tab.save_document()
         else:
             logger.warning("没有当前文档可以保存")
-    
+
     def undo(self):
         """撤销"""
         tab = self.get_current_tab()

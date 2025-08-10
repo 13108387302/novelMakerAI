@@ -106,15 +106,15 @@ class ToolBarBuilder(QObject):
         
     def _add_view_actions(self, toolbar: QToolBar, main_window):
         """添加视图操作（简化版）"""
-        # AI助手面板切换（合并AI功能入口）
-        ai_assistant_action = QAction("AI助手", main_window)
+        # AI Studio 显示/隐藏
+        ai_assistant_action = QAction("AI Studio", main_window)
         ai_assistant_action.setCheckable(True)
         ai_assistant_action.setChecked(True)
-        ai_assistant_action.setToolTip("显示/隐藏AI助手面板 - 包含所有AI功能")
+        ai_assistant_action.setToolTip("显示/隐藏 AI Studio 页面")
         ai_assistant_action.triggered.connect(lambda: self._emit_action("toggle_ai_panel", ai_assistant_action))
         toolbar.addAction(ai_assistant_action)
         self.actions["toggle_ai_panel"] = ai_assistant_action
-        
+
     def _add_status_widgets(self, toolbar: QToolBar, main_window):
         """添加状态组件"""
         # 创建状态容器

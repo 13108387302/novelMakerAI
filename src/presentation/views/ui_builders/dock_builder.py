@@ -6,7 +6,7 @@
 负责创建和配置主窗口的停靠窗口
 """
 
-from PyQt6.QtWidgets import QDockWidget, QTabWidget
+from PyQt6.QtWidgets import QDockWidget
 from PyQt6.QtCore import QObject, pyqtSignal, Qt
 
 from src.shared.utils.logger import get_logger
@@ -54,36 +54,7 @@ class DockBuilder(QObject):
 
         return project_dock
 
-    def create_ai_dock(self, main_window, ai_panel_widget) -> QDockWidget:
-        """创建AI停靠窗口"""
-        ai_dock = QDockWidget("AI助手", main_window)
-        ai_dock.setObjectName("ai_dock")
-        ai_dock.setAllowedAreas(
-            Qt.DockWidgetArea.LeftDockWidgetArea | 
-            Qt.DockWidgetArea.RightDockWidgetArea
-        )
-        
-        # 设置AI面板组件
-        ai_dock.setWidget(ai_panel_widget)
-        
-        # 连接可见性变化信号
-        ai_dock.visibilityChanged.connect(
-            lambda visible: self.dock_visibility_changed.emit("ai", visible)
-        )
-        
-        # 添加到主窗口
-        main_window.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, ai_dock)
-        
-        # 保存引用
-        self.docks["ai"] = ai_dock
-        main_window.ai_dock = ai_dock
-        # 注册到主窗口的注册表
-        if hasattr(main_window, 'dock_registry'):
-            main_window.dock_registry["ai"] = ai_dock
-            main_window.view_registry["global_ai_panel"] = ai_panel_widget
-
-        return ai_dock
-
+    # 旧的 AI Dock 已废弃，改为中心区域 AI Studio 页面
     def create_status_dock(self, main_window, status_panel_widget) -> QDockWidget:
         """创建状态停靠窗口"""
         status_dock = QDockWidget("状态", main_window)
@@ -118,49 +89,7 @@ class DockBuilder(QObject):
 
         return status_dock
 
-    def create_tabbed_right_dock(self, main_window, ai_panel_widget, document_ai_panel_widget) -> QTabWidget:
-        """创建右侧标签页停靠窗口"""
-        # 创建标签页容器
-        right_tabs = QTabWidget()
-        right_tabs.setObjectName("right_tabs")
-
-        # 添加AI面板标签页
-        right_tabs.addTab(ai_panel_widget, "🤖 全局AI")
-
-        # 添加文档AI面板标签页
-        right_tabs.addTab(document_ai_panel_widget, "📝 文档AI")
-        
-        # 创建停靠窗口
-        right_dock = QDockWidget("AI助手", main_window)
-        right_dock.setObjectName("right_dock")
-        right_dock.setAllowedAreas(
-            Qt.DockWidgetArea.LeftDockWidgetArea | 
-            Qt.DockWidgetArea.RightDockWidgetArea
-        )
-        
-        # 设置标签页容器为停靠窗口的组件
-        right_dock.setWidget(right_tabs)
-        
-        # 连接可见性变化信号
-        right_dock.visibilityChanged.connect(
-            lambda visible: self.dock_visibility_changed.emit("right_tabs", visible)
-        )
-        
-        # 添加到主窗口
-        main_window.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, right_dock)
-        
-        # 保存引用
-        self.docks["right_tabs"] = right_dock
-        main_window.right_dock = right_dock
-        main_window.right_tabs = right_tabs
-        # 注册到主窗口的注册表
-        if hasattr(main_window, 'dock_registry'):
-            main_window.dock_registry["right_tabs"] = right_dock
-            main_window.view_registry["right_tabs"] = right_tabs
-            main_window.view_registry["document_ai_container"] = document_ai_panel_widget
-
-        return right_tabs
-
+    # 旧的右侧标签页 Dock 已废弃（全局AI/文档AI），改用 AI Studio 页面
     def create_output_dock(self, main_window) -> QDockWidget:
         """创建输出停靠窗口（系统输出）"""
         from PyQt6.QtWidgets import QTextEdit
@@ -245,23 +174,9 @@ class DockBuilder(QObject):
         """设置停靠窗口大小"""
         try:
             # 设置左右停靠窗口的宽度比例
-            if "project" in self.docks and "right_tabs" in self.docks:
-                # 获取主窗口宽度
-                main_width = main_window.width()
-                
-                # 设置项目树宽度为主窗口的20%
-                project_width = int(main_width * 0.2)
-                
-                # 设置AI面板宽度为主窗口的25%
-                ai_width = int(main_width * 0.25)
-                
-                # 应用大小
-                main_window.resizeDocks(
-                    [self.docks["project"], self.docks["right_tabs"]],
-                    [project_width, ai_width],
-                    Qt.Orientation.Horizontal
-                )
-                
+            # 旧的 right_tabs 尺寸管理已移除，AI Studio 在中央区域
+            return
+
         except Exception as e:
             logger.warning(f"设置停靠窗口大小失败: {e}")
             

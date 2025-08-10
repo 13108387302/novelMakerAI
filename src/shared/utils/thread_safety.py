@@ -19,58 +19,32 @@ logger = get_logger(__name__)
 
 def ensure_main_thread(func: Callable) -> Callable:
     """
-    确保函数在主线程中执行的装饰器
+    确保函数在主线程中执行的装饰器（稳定版）
 
-    检查当前线程是否为Qt主线程，如果不是则尝试切换到主线程执行。
-    主要用于UI操作必须在主线程中执行的场景。
-
-    实现方式：
-    - 检查当前线程是否为Qt应用程序的主线程
-    - 如果不是主线程且第一个参数是QObject，使用QMetaObject.invokeMethod切换
-    - 使用BlockingQueuedConnection确保同步执行
-    - 正确传递异常和返回值
-
-    Args:
-        func: 要装饰的函数
-
-    Returns:
-        Callable: 装饰后的函数
-
-    Raises:
-        RuntimeError: 当不在主线程且无法切换时抛出
+    - 使用 is_main_thread() 做统一判断
+    - 若不在主线程，使用 safe_qt_call 调度到主线程并阻塞等待结果
+    - 避免直接使用 QMetaObject.invokeMethod 传递 Python 可调用对象带来的不兼容问题
     """
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
-        app = QApplication.instance()
-        if app and app.thread() != threading.current_thread():
-            logger.warning(f"函数 {func.__name__} 不在主线程中执行，尝试切换到主线程")
+        try:
+            # 已在主线程，直接执行
+            if is_main_thread():
+                return func(*args, **kwargs)
 
-            # 如果有QObject实例，使用QMetaObject.invokeMethod
-            if args and isinstance(args[0], QObject):
-                result = None
-                exception = None
+            # 不在主线程，必须存在 QApplication
+            app = QApplication.instance()
+            if not app:
+                raise RuntimeError("没有QApplication实例，无法切换到主线程执行")
 
-                def invoke_in_main_thread():
-                    nonlocal result, exception
-                    try:
-                        result = func(*args, **kwargs)
-                    except Exception as e:
-                        exception = e
+            logger.warning(f"函数 {func.__name__} 不在主线程中执行，切换到主线程调用")
 
-                QMetaObject.invokeMethod(
-                    args[0],
-                    invoke_in_main_thread,
-                    Qt.ConnectionType.BlockingQueuedConnection
-                )
+            # 使用 safe_qt_call 在主线程执行并等待返回
+            return safe_qt_call(func, *args, **kwargs)
+        except Exception as e:
+            logger.error(f"ensure_main_thread 调用失败: {func.__name__}: {e}")
+            raise
 
-                if exception:
-                    raise exception
-                return result
-            else:
-                raise RuntimeError(f"函数 {func.__name__} 必须在主线程中执行")
-        
-        return func(*args, **kwargs)
-    
     return wrapper
 
 

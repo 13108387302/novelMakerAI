@@ -52,16 +52,21 @@ class AIConsoleWidget(QWidget):
         self.output.setPlaceholderText("AI 输出将显示在这里…\n可在面板中触发动作或对话，长响应会流式显示。")
         layout.addWidget(self.output, 1)
 
-    # 基础输出 API
+    # 基础输出 API（强制主线程）
+    from src.shared.utils.thread_safety import ensure_main_thread
+
+    @ensure_main_thread
     def clear(self) -> None:
         self.output.clear()
 
+    @ensure_main_thread
     def append_html(self, html: str) -> None:
         self.output.moveCursor(QTextCursor.MoveOperation.End)
         self.output.insertHtml(html)
         self.output.insertPlainText("\n")
         self.output.moveCursor(QTextCursor.MoveOperation.End)
 
+    @ensure_main_thread
     def append_text(self, text: str) -> None:
         self.output.moveCursor(QTextCursor.MoveOperation.End)
         self.output.insertPlainText(text + "\n")

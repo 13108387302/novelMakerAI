@@ -11,10 +11,10 @@ from typing import Dict, Any, Optional, List
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTextEdit, QLabel,
     QPushButton, QFrame, QScrollArea, QGroupBox, QGraphicsDropShadowEffect,
-    QProgressBar, QSizePolicy
+    QProgressBar, QSizePolicy, QDialog, QDialogButtonBox
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QPropertyAnimation, QEasingCurve, QRect
-from PyQt6.QtGui import QFont, QColor, QPalette
+from PyQt6.QtGui import QFont, QColor, QPalette, QGuiApplication
 
 from src.presentation.styles.ai_panel_styles import (
     get_complete_ai_style, SPECIAL_BUTTON_STYLES, COLORS
@@ -38,6 +38,8 @@ class ModernAIWidget(QWidget):
 
     # 线程安全的UI更新信号
     ui_update_signal = pyqtSignal(str)  # 用于线程安全的UI更新
+    # 上下文来源提示
+    context_source_changed = pyqtSignal(str)
 
     def __init__(self, parent=None, settings_service=None):
         super().__init__(parent)
@@ -67,6 +69,10 @@ class ModernAIWidget(QWidget):
 
         # 应用样式
         self._apply_modern_styles()
+
+        # 密度/间距设置
+        self._density = self._get_setting('ai.density', 'comfortable')
+        self._apply_density_from_settings()
 
         # 尝试获取AI服务
         self._initialize_ai_services()
@@ -116,6 +122,31 @@ class ModernAIWidget(QWidget):
     def _apply_modern_styles(self):
         """应用现代化样式"""
         self.setStyleSheet(get_complete_ai_style())
+
+    def _get_setting(self, key: str, default=None):
+        try:
+            if self.settings_service:
+                return self.settings_service.get(key, default)
+        except Exception:
+            pass
+        return default
+
+    def _apply_density_from_settings(self):
+        try:
+            density = (self._density or 'comfortable').lower()
+            if density not in ('comfortable', 'compact'):
+                density = 'comfortable'
+            if density == 'compact':
+                margins = (8, 8, 8, 8)
+                spacing = 8
+            else:
+                margins = (16, 16, 16, 16)
+                spacing = 16
+            if hasattr(self, 'scroll_layout') and self.scroll_layout:
+                self.scroll_layout.setContentsMargins(*margins)
+                self.scroll_layout.setSpacing(spacing)
+        except Exception:
+            pass
 
     def _initialize_ai_services(self):
         """初始化AI服务"""
@@ -186,8 +217,55 @@ class ModernAIWidget(QWidget):
 
         # 添加悬停动画效果
         self._add_button_animation(button)
-
         return button
+
+    def create_quick_actions_bar(self) -> QGroupBox:
+        """创建统一的快捷执行区（根据可用槽函数自动装配）"""
+        box = QGroupBox("⚡ 快捷操作")
+        layout = QHBoxLayout(box)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(8)
+
+        # 读取配置以过滤展示项（逗号分隔），为空表示全部
+        cfg = str(self._get_setting('ai.quick_actions', '') or '').strip()
+        allow: Optional[set] = None
+        if cfg:
+            allow = {n.strip() for n in cfg.split(',') if n.strip()}
+
+        def maybe_add_btn(title, icon, slot_name, style="writing"):
+            if allow is not None and title not in allow:
+                return
+            slot = getattr(self, slot_name, None)
+            if callable(slot):
+                btn = self.create_modern_button(title, icon, style, title, slot)
+                btn.setMinimumHeight(28)
+                layout.addWidget(btn)
+
+        # 文档常用
+        maybe_add_btn("智能续写", "📝", "_on_smart_continue")
+        maybe_add_btn("内容扩展", "📖", "_on_content_expand")
+        maybe_add_btn("对话生成", "💬", "_on_dialogue_generation")
+        maybe_add_btn("场景描写", "🎭", "_on_scene_description")
+        maybe_add_btn("语言润色", "✨", "_on_language_polish")
+        # 全局常用（若存在）
+        maybe_add_btn("大纲生成", "🧭", "_on_outline_generation")
+        maybe_add_btn("人物设定", "👤", "_on_character_creation")
+        maybe_add_btn("世界观", "🌍", "_on_worldbuilding")
+        maybe_add_btn("智能命名", "🏷️", "_on_smart_naming")
+
+        layout.addStretch()
+        return box
+
+    def create_context_source_badge(self) -> QLabel:
+        """创建上下文来源提示徽章"""
+        label = QLabel("上下文来源: 未知")
+        label.setStyleSheet("color:#718096;font-size:12px;padding:2px 6px;border-radius:4px;background:#F1F5F9;")
+        # 连接信号
+        try:
+            self.context_source_changed.connect(lambda src: label.setText(f"上下文来源: {src}"))
+        except Exception:
+            pass
+        return label
 
     def _add_button_animation(self, button: QPushButton):
         """为按钮添加动画效果"""
@@ -234,25 +312,168 @@ class ModernAIWidget(QWidget):
         """创建带滚动条的输出区域"""
         from PyQt6.QtWidgets import QScrollArea
 
+        density = (self._density or 'comfortable').lower() if hasattr(self, '_density') else 'comfortable'
+        if density not in ('comfortable', 'compact'):
+            density = 'comfortable'
+        # 不同密度的高度建议
+        if density == 'compact':
+            text_min = 120
+            area_min, area_max = 160, 320
+        else:
+            text_min = 150
+            area_min, area_max = 200, 400
+
         # 创建文本编辑器
         output_text = QTextEdit()
         output_text.setPlaceholderText(placeholder)
         output_text.setReadOnly(True)
-        output_text.setMinimumHeight(150)
+        output_text.setMinimumHeight(text_min)
         output_text.setObjectName("OutputText")
 
         # 创建滚动区域
         scroll_area = QScrollArea()
         scroll_area.setWidget(output_text)
         scroll_area.setWidgetResizable(True)
-        scroll_area.setMinimumHeight(200)
-        scroll_area.setMaximumHeight(400)
+        scroll_area.setMinimumHeight(area_min)
+        scroll_area.setMaximumHeight(area_max)
         scroll_area.setObjectName("OutputArea")
 
         # 保存文本编辑器的引用，用于更新内容
         scroll_area.output_text = output_text
-
         return scroll_area
+    def create_output_toolbar(self) -> QHBoxLayout:
+        """创建输出区上方的写回方式工具条"""
+        layout = QHBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        self.apply_insert_btn = QPushButton("插入到光标处")
+        self.apply_replace_btn = QPushButton("替换选中内容")
+        self.apply_append_btn = QPushButton("追加到文尾")
+        for b in (self.apply_insert_btn, self.apply_replace_btn, self.apply_append_btn):
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setStyleSheet("padding:6px 10px;")
+        layout.addWidget(self.apply_insert_btn)
+        layout.addWidget(self.apply_replace_btn)
+        layout.addWidget(self.apply_append_btn)
+        layout.addStretch()
+
+        # 常用操作
+        self.copy_output_btn = QPushButton("复制结果")
+        self.copy_output_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.clear_output_btn = QPushButton("清空结果")
+        self.clear_output_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        layout.addWidget(self.copy_output_btn)
+        layout.addWidget(self.clear_output_btn)
+
+        # 视图控制
+        self.toggle_collapse_btn = QPushButton("折叠输出")
+        self.toggle_collapse_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.toggle_maximize_btn = QPushButton("最大化")
+        self.toggle_maximize_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        layout.addWidget(self.toggle_collapse_btn)
+        layout.addWidget(self.toggle_maximize_btn)
+
+        # 撤销提示标签（临时显示）
+        self.undo_hint = QLabel("")
+        self.undo_hint.setStyleSheet("color:#718096;font-size:12px;")
+        layout.addWidget(self.undo_hint)
+
+        # 连接点击行为 -> 发出写回信号
+        def _get_output_text() -> str:
+            try:
+                if hasattr(self, 'output_area') and hasattr(self.output_area, 'output_text'):
+                    return self.output_area.output_text.toPlainText()
+            except Exception:
+                return ""
+            return ""
+
+        self.apply_insert_btn.clicked.connect(lambda: self._emit_apply_insert(_get_output_text()))
+        self.apply_replace_btn.clicked.connect(lambda: self._emit_apply_replace(_get_output_text()))
+        self.apply_append_btn.clicked.connect(lambda: self._emit_apply_append(_get_output_text()))
+        self.copy_output_btn.clicked.connect(self._copy_output_text)
+        self.clear_output_btn.clicked.connect(self._clear_output_text)
+        self.toggle_collapse_btn.clicked.connect(self._toggle_output_collapsed)
+        self.toggle_maximize_btn.clicked.connect(self._open_output_max_view)
+        return layout
+
+    def _emit_apply_insert(self, text: str):
+        if text.strip():
+            self.text_insert_requested.emit(text, -1)
+            self._show_undo_hint("已插入，可按Ctrl+Z撤销")
+
+    def _emit_apply_replace(self, text: str):
+        if text.strip():
+            # 用 (-1,-1) 让 MainWindow 使用当前选择范围
+            self.text_replace_requested.emit(text, -1, -1)
+            self._show_undo_hint("已替换，可按Ctrl+Z撤销")
+
+    def _emit_apply_append(self, text: str):
+        if text.strip():
+            # 约定 position=-2 表示追加到文尾，由 MainWindow 侧处理
+            self.text_insert_requested.emit(text + "\n", -2)
+            self._show_undo_hint("已追加到文尾，可按Ctrl+Z撤销")
+
+    def _show_undo_hint(self, msg: str):
+        try:
+            self.undo_hint.setText(msg)
+            QTimer.singleShot(3000, lambda: self.undo_hint.setText(""))
+        except Exception:
+            pass
+
+    def _toggle_output_collapsed(self):
+        try:
+            if not hasattr(self, '_output_collapsed'):
+                self._output_collapsed = False
+            self._output_collapsed = not self._output_collapsed
+            if hasattr(self, 'output_area') and self.output_area:
+                self.output_area.setVisible(not self._output_collapsed)
+            self.toggle_collapse_btn.setText("展开输出" if self._output_collapsed else "折叠输出")
+        except Exception as e:
+            logger.warning(f"切换输出折叠失败: {e}")
+
+    def _open_output_max_view(self):
+        try:
+            # 快速只读查看对话框
+            dlg = QDialog(self)
+            dlg.setWindowTitle("AI输出 - 最大化查看")
+            v = QVBoxLayout(dlg)
+            view = QTextEdit()
+            view.setReadOnly(True)
+            text = ""
+            try:
+                if hasattr(self, 'output_area') and hasattr(self.output_area, 'output_text'):
+                    text = self.output_area.output_text.toPlainText()
+            except Exception:
+                pass
+            view.setPlainText(text)
+            v.addWidget(view)
+            btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+            btns.rejected.connect(dlg.reject)
+            btns.accepted.connect(dlg.accept)
+            v.addWidget(btns)
+            dlg.resize(900, 650)
+            dlg.exec()
+        except Exception as e:
+            logger.warning(f"打开最大化查看失败: {e}")
+
+    def _copy_output_text(self):
+        try:
+            if hasattr(self, 'output_area') and hasattr(self.output_area, 'output_text'):
+                text = self.output_area.output_text.toPlainText()
+                if text:
+                    QGuiApplication.clipboard().setText(text)
+                    self._show_undo_hint("已复制结果到剪贴板")
+        except Exception as e:
+            logger.warning(f"复制结果失败: {e}")
+
+    def _clear_output_text(self):
+        try:
+            self._clear_output()
+            self._show_undo_hint("已清空结果")
+        except Exception as e:
+            logger.warning(f"清空结果失败: {e}")
+
 
     def create_chat_interface(self) -> QWidget:
         """创建聊天界面"""
@@ -418,6 +639,13 @@ class ModernAIWidget(QWidget):
     def add_stretch(self):
         """添加弹性空间"""
         self.scroll_layout.addStretch()
+
+    def add_layout(self, layout: QHBoxLayout):
+        """添加布局到滚动内容区域"""
+        try:
+            self.scroll_layout.addLayout(layout)
+        except Exception as e:
+            logger.warning(f"添加布局失败: {e}")
 
     def set_selected_text(self, text: str):
         """设置选中文本"""
@@ -598,18 +826,29 @@ class ModernAIWidget(QWidget):
             end = min(len(text), pos + after)
             return text[start:end]
 
-        if func_type in {"continue", "dialogue", "scene"}:
+        source = None
+        if self.selected_text:
+            full_prompt += f"选中文本:\n{self.selected_text}\n\n"
+            source = "选中内容"
+        elif func_type in {"continue", "dialogue", "scene"}:
             local_ctx = _extract_local_context()
             if local_ctx:
                 full_prompt += f"附近上下文片段:\n{local_ctx}\n\n"
+                source = "光标附近"
             elif self.document_context:
                 full_prompt += f"文档上下文:\n{self.document_context[:1000]}...\n\n"
+                source = "文档摘要"
         else:
             if self.document_context:
                 full_prompt += f"文档上下文:\n{self.document_context[:1000]}...\n\n"
+                source = "文档摘要"
 
-        if self.selected_text:
-            full_prompt += f"选中文本:\n{self.selected_text}\n\n"
+        # 发射上下文来源提示
+        try:
+            if source:
+                self.context_source_changed.emit(source)
+        except Exception:
+            pass
 
         # 添加具体指令
         full_prompt += f"指令:\n{prompt}\n\n"
@@ -798,7 +1037,15 @@ class ModernAIWidget(QWidget):
             if accumulated_content:
                 final_content = str(accumulated_content)
                 logger.info(f"🎯 最终更新UI，内容: '{final_content[:100]}...'")
-                self.ui_update_signal.emit(final_content)
+                # 最终一次支持Markdown渲染（强制主线程执行）
+                try:
+                    if self.settings_service and self.settings_service.get('ai.render_markdown', True):
+                        self._safe_ui_update(lambda fc=final_content: self._render_to_output(fc))
+                    else:
+                        # 通过信号进入主线程
+                        self.ui_update_signal.emit(final_content)
+                except Exception:
+                    self.ui_update_signal.emit(final_content)
             else:
                 logger.warning("⚠️ 没有接收到任何内容！")
 
@@ -806,11 +1053,12 @@ class ModernAIWidget(QWidget):
             self._safe_ui_update(lambda: self.show_status(f"{function_name} 完成", "success"))
             logger.info(f"🎉 流式处理完成，共处理 {chunk_count} 个块，总长度 {len(accumulated_content)} 字符")
 
-            # 智能续写默认自动插入
+            # 智能续写默认自动插入（支持 options 覆盖设置）
             try:
-                auto_apply = True
-                if self.settings_service:
-                    auto_apply = self.settings_service.get('ai.auto_apply_continue', True)
+                # 优先读取 options 中的配置，其次读取 settings_service
+                auto_apply = (options or {}).get('auto_apply_continue', None)
+                if auto_apply is None:
+                    auto_apply = self.settings_service.get('ai.auto_apply_continue', True) if self.settings_service else True
                 if (options or {}).get('type') == 'continue' and auto_apply and accumulated_content.strip():
                     self.text_insert_requested.emit(accumulated_content, -1)
                     self.text_applied.emit(accumulated_content)
@@ -828,12 +1076,19 @@ class ModernAIWidget(QWidget):
         if response.is_successful:
             # 在主线程中更新UI
             QTimer.singleShot(0, lambda: self.show_status(f"{function_name} 完成", "success"))
-            QTimer.singleShot(0, lambda: self._display_ai_response(response.content))
-            # 非流式也支持自动插入
+            # 非流式最终渲染（支持Markdown）
             try:
-                auto_apply = True
-                if self.settings_service:
-                    auto_apply = self.settings_service.get('ai.auto_apply_continue', True)
+                if self.settings_service and self.settings_service.get('ai.render_markdown', True):
+                    QTimer.singleShot(0, lambda: self._render_to_output(response.content))
+                else:
+                    QTimer.singleShot(0, lambda: self._display_ai_response(response.content))
+            except Exception:
+                QTimer.singleShot(0, lambda: self._display_ai_response(response.content))
+            # 非流式也支持自动插入（支持 options 覆盖设置）
+            try:
+                auto_apply = (options or {}).get('auto_apply_continue', None)
+                if auto_apply is None:
+                    auto_apply = self.settings_service.get('ai.auto_apply_continue', True) if self.settings_service else True
                 if (options or {}).get('type') == 'continue' and auto_apply and response.content.strip():
                     self.text_insert_requested.emit(response.content, -1)
                     self.text_applied.emit(response.content)
@@ -1035,7 +1290,7 @@ class ModernAIWidget(QWidget):
                 text_widget = self.output_area.output_text
                 logger.info(f"✅ 找到 output_text: {type(text_widget)}")
 
-                # 设置文本内容
+                # 设置文本内容（流式阶段保持纯文本，避免渲染抖动）
                 text_widget.setPlainText(content)
                 logger.info(f"📝 文本内容已设置，长度: {len(content)}")
 
@@ -1055,3 +1310,62 @@ class ModernAIWidget(QWidget):
 
         except Exception as e:
             logger.error(f"❌ 更新流式输出失败: {e}", exc_info=True)
+
+    def _render_to_output(self, markdown_text: str):
+        """将Markdown渲染成HTML并显示到输出区（最终完成时调用）"""
+        try:
+            if not hasattr(self, 'output_area') or not self.output_area or not hasattr(self.output_area, 'output_text'):
+                return
+            # 简易Markdown渲染：标题、粗体、代码块和列表（不引入依赖）
+            html = self._simple_markdown_to_html(markdown_text)
+            # 确保在主线程更新 QTextDocument（安全起见）
+            from src.shared.utils.thread_safety import is_main_thread
+            if is_main_thread():
+                self.output_area.output_text.setHtml(html)
+            else:
+                from src.shared.utils.thread_safety import safe_qt_call
+                safe_qt_call(self.output_area.output_text.setHtml, html)
+        except Exception as e:
+            logger.warning(f"Markdown渲染失败: {e}")
+            # 回退纯文本
+            try:
+                self.output_area.output_text.setPlainText(markdown_text)
+            except Exception:
+                pass
+
+    def _simple_markdown_to_html(self, text: str) -> str:
+        """非常轻量的Markdown->HTML（足够用于可读性增强）"""
+        import html
+        t = html.escape(text)
+        # 粗体 **bold**
+        t = t.replace("**", "\u0000")  # 暂存
+        parts = t.split("\u0000")
+        t = ''.join([f"<b>{p}</b>" if i % 2 == 1 else p for i, p in enumerate(parts)])
+        # 标题 #, ##
+        lines = []
+        for line in t.split('\n'):
+            s = line.lstrip()
+            if s.startswith('### '):
+                lines.append(f"<h3>{s[4:]}</h3>")
+            elif s.startswith('## '):
+                lines.append(f"<h2>{s[3:]}</h2>")
+            elif s.startswith('# '):
+                lines.append(f"<h1>{s[2:]}</h1>")
+            elif s.startswith('- '):
+                lines.append(f"<li>{s[2:]}</li>")
+            else:
+                lines.append(f"<p>{line}</p>")
+        # 列表包裹
+        html_lines = []
+        in_list = False
+        for line in lines:
+            if line.startswith('<li>') and not in_list:
+                html_lines.append('<ul>')
+                in_list = True
+            if not line.startswith('<li>') and in_list:
+                html_lines.append('</ul>')
+                in_list = False
+            html_lines.append(line)
+        if in_list:
+            html_lines.append('</ul>')
+        return '\n'.join(html_lines)

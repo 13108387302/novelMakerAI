@@ -52,21 +52,13 @@ class AIWidgetFactory:
     def _register_panel_types(self):
         """注册面板类型"""
         try:
-            # 导入面板类
+            # 仅注册智能面板；全局/文档面板已被 AI Studio 取代
             from ..panels.intelligent_ai_panel import IntelligentAIPanel
-            from ..panels.document_ai_panel import DocumentAIPanel
-            from ..panels.global_ai_panel import GlobalAIPanel
-            
-            # 注册面板
             self._panels['intelligent'] = IntelligentAIPanel
-            self._panels['document'] = DocumentAIPanel
-            self._panels['global'] = GlobalAIPanel
-            
-            logger.debug("AI面板类型注册完成")
-            
+            logger.debug("AI面板类型注册完成（仅智能面板）")
         except Exception as e:
             logger.error(f"注册AI面板类型失败: {e}")
-            
+
     def create_intelligent_ai_panel(self, parent: Optional[QWidget] = None) -> Optional[QWidget]:
         """
         创建智能化AI面板
@@ -91,65 +83,23 @@ class AIWidgetFactory:
         """
         return self.create_intelligent_ai_panel(parent)
 
-    def create_document_panel(self, ai_service, document_id: str, document_type: str = "chapter", parent: Optional[QWidget] = None) -> Optional[QWidget]:
-        """
-        创建文档AI面板（别名方法）
+    # 文档/全局面板已被 AI Studio 替代，保留占位以避免外部调用失败
+    def create_document_panel(self, *args, **kwargs) -> Optional[QWidget]:
+        logger.warning("DocumentAIPanel 已被 AI Studio 替代")
+        return None
 
-        Args:
-            ai_service: AI服务
-            document_id: 文档ID
-            document_type: 文档类型
-            parent: 父组件
+    def create_global_panel(self, *args, **kwargs) -> Optional[QWidget]:
+        logger.warning("GlobalAIPanel 已被 AI Studio 替代")
+        return None
 
-        Returns:
-            QWidget: 创建的面板，失败返回None
-        """
-        return self.create_document_ai_panel(ai_service, document_id, document_type, parent)
+    def create_document_ai_panel(self, *args, **kwargs) -> Optional[QWidget]:
+        logger.warning("create_document_ai_panel 已废弃，使用 AI Studio")
+        return None
 
-    def create_global_panel(self, ai_service, parent: Optional[QWidget] = None) -> Optional[QWidget]:
-        """
-        创建全局AI面板（别名方法）
+    def create_global_ai_panel(self, *args, **kwargs) -> Optional[QWidget]:
+        logger.warning("create_global_ai_panel 已废弃，使用 AI Studio")
+        return None
 
-        Args:
-            ai_service: AI服务
-            parent: 父组件
-
-        Returns:
-            QWidget: 创建的面板，失败返回None
-        """
-        return self.create_global_ai_panel(ai_service, parent)
-        
-    def create_document_ai_panel(self, ai_service, document_id: str, document_type: str = "chapter", parent: Optional[QWidget] = None) -> Optional[QWidget]:
-        """
-        创建文档AI面板
-        
-        Args:
-            ai_service: AI服务
-            document_id: 文档ID
-            document_type: 文档类型
-            parent: 父组件
-            
-        Returns:
-            QWidget: 创建的面板，失败返回None
-        """
-        panel = self.create_panel('document', parent)
-        if panel and hasattr(panel, 'set_document_info'):
-            panel.set_document_info(document_id, document_type)
-        return panel
-        
-    def create_global_ai_panel(self, ai_service, parent: Optional[QWidget] = None) -> Optional[QWidget]:
-        """
-        创建全局AI面板
-        
-        Args:
-            ai_service: AI服务
-            parent: 父组件
-            
-        Returns:
-            QWidget: 创建的面板，失败返回None
-        """
-        return self.create_panel('global', parent)
-        
     def create_panel(self, panel_type: str, parent: Optional[QWidget] = None, **kwargs) -> Optional[QWidget]:
         """
         创建AI面板

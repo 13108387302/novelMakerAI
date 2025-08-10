@@ -18,10 +18,8 @@ from .components.ai_input_component import AIInputComponent
 from .components.ai_output_component import AIOutputComponent
 from .components.ai_status_component import AIStatusComponent
 
-# 面板组件
+# 面板组件（仅保留智能面板；全局/文档面板已被 AI Studio 取代）
 from .panels.intelligent_ai_panel import IntelligentAIPanel
-from .panels.document_ai_panel import DocumentAIPanel
-from .panels.global_ai_panel import GlobalAIPanel
 
 # 工厂和管理器
 from .factories.ai_widget_factory import AIWidgetFactory
@@ -107,25 +105,8 @@ def create_intelligent_ai_panel(parent=None) -> Optional[IntelligentAIPanel]:
     return _ai_widget_factory.create_intelligent_panel(parent)
 
 
-def create_document_ai_panel(ai_service, document_id: str, document_type: str = "chapter", parent=None) -> Optional[DocumentAIPanel]:
-    """创建文档AI面板"""
-    if not _ai_widget_factory:
-        logger.error("AI组件工厂未初始化")
-        return None
-    return _ai_widget_factory.create_document_panel(ai_service, document_id, document_type, parent)
 
 
-def create_global_ai_panel(ai_service=None, parent=None, settings_service=None) -> Optional[GlobalAIPanel]:
-    """创建全局AI面板"""
-    if not _ai_widget_factory:
-        logger.error("AI组件工厂未初始化")
-        return None
-
-    # 如果传递了设置服务，临时设置到工厂中
-    if settings_service and hasattr(_ai_widget_factory, 'settings_service'):
-        _ai_widget_factory.settings_service = settings_service
-
-    return _ai_widget_factory.create_global_ai_panel(ai_service, parent)
 
 
 def shutdown_ai_components():
@@ -156,8 +137,6 @@ __all__ = [
 
     # 面板组件
     'IntelligentAIPanel',
-    'DocumentAIPanel',
-    'GlobalAIPanel',
 
     # 工厂和管理器
     'AIWidgetFactory',
@@ -173,7 +152,5 @@ __all__ = [
     'get_ai_widget_factory',
     'get_ai_ui_manager',
     'create_intelligent_ai_panel',
-    'create_document_ai_panel',
-    'create_global_ai_panel',
     'shutdown_ai_components'
 ]

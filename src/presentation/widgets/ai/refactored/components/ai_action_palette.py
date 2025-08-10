@@ -94,12 +94,117 @@ class AIActionPalette(QDialog):
             # 若需要选区且当前无选区，则禁用（但仍展示给予提示）
             if need_sel and not selected_text:
                 def disabled_handler():
-                    # 利用面板的状态提示
                     if hasattr(panel, 'show_status'):
                         panel.show_status("请先选择文本", "warning")
                 actions.append(AIAction(id=title, title=f"{title}（需选区）", handler=disabled_handler, require_selection=True))
             else:
                 actions.append(AIAction(id=title, title=title, handler=handler, require_selection=need_sel))
+
+        # 智能排序（可配置）：有选区优先“润色/扩写/改写”；无选区且光标在行尾优先“续写/对话”
+        try:
+            use_smart = True
+            try:
+                from src.presentation.widgets.ai.refactored import get_ai_widget_factory
+                factory = get_ai_widget_factory()
+                if factory and getattr(factory, 'settings_service', None):
+                    use_smart = bool(factory.settings_service.get('ai.smart_action_sorting', True))
+            except Exception:
+                pass
+
+            if use_smart:
+                is_selection = bool(selected_text and selected_text.strip())
+                # 尝试从 panel 获取是否在行尾（可选能力）
+                at_line_end = False
+                if hasattr(panel, 'document_context') and hasattr(panel, '_cursor_position') and isinstance(panel._cursor_position, int):
+                    ctx = panel.document_context or ""
+                    pos = panel._cursor_position if 0 <= panel._cursor_position <= len(ctx) else len(ctx)
+                    # 行尾：后续到换行/结尾无字符
+                    at_line_end = pos >= len(ctx) or ctx[pos:pos+1] in ('\n', '\r')
+
+                priority = []
+                if is_selection:
+                    priority = ["语言润色", "内容扩展", "风格调整", "结构优化"]
+                elif at_line_end:
+                    priority = ["智能续写", "对话生成", "场景描写"]
+
+                if priority:
+                    order = {name: i for i, name in enumerate(priority)}
+                    def key(a: AIAction):
+                        # 去掉“（需选区）”后比较
+                        name = a.title.split('（')[0]
+                        return order.get(name, 999), a.title
+                    actions.sort(key=key)
+        except Exception:
+            pass
+
         dlg.set_actions(actions)
+        return dlg
+
+    # 便捷构造：从通用 AI 组件生成动作（AI Studio/ModernAIWidget）
+    @staticmethod
+    def from_ai_widget(ai_widget, selected_text: str) -> 'AIActionPalette':
+        dlg = AIActionPalette(ai_widget)
+        actions: List[AIAction] = []
+
+        def make(fn_id: str, title: str, type_: str, need_sel: bool = False):
+            def handler():
+                ai_widget.execute_ai_request(fn_id, title, {"type": type_})
+            return AIAction(id=fn_id, title=title, handler=handler, require_selection=need_sel)
+
+        actions.extend([
+            make("smart_continue", "智能续写", "continue", False),
+            make("content_expand", "内容扩展", "expand", True),
+            make("dialogue_generation", "对话生成", "dialogue", False),
+            make("scene_description", "场景描写", "scene", False),
+            make("language_polish", "语言润色", "polish", True),
+            make("style_adjustment", "风格调整", "style", True),
+            make("structure_optimization", "结构优化", "structure", False),
+            make("logic_check", "逻辑检查", "logic", False),
+        ])
+
+        # 根据是否有选区/行尾进行智能排序（沿用现有逻辑）
+        try:
+            use_smart = True
+            try:
+                from src.presentation.widgets.ai.refactored import get_ai_widget_factory
+                factory = get_ai_widget_factory()
+                if factory and getattr(factory, 'settings_service', None):
+                    use_smart = bool(factory.settings_service.get('ai.smart_action_sorting', True))
+            except Exception:
+                pass
+
+            if use_smart:
+                is_selection = bool(selected_text and selected_text.strip())
+                at_line_end = False
+                if hasattr(ai_widget, 'document_context') and hasattr(ai_widget, '_cursor_position') and isinstance(ai_widget._cursor_position, int):
+                    ctx = ai_widget.document_context or ""
+                    pos = ai_widget._cursor_position if 0 <= ai_widget._cursor_position <= len(ctx) else len(ctx)
+                    at_line_end = pos >= len(ctx) or ctx[pos:pos+1] in ('\n', '\r')
+                priority = []
+                if is_selection:
+                    priority = ["语言润色", "内容扩展", "风格调整", "结构优化"]
+                elif at_line_end:
+                    priority = ["智能续写", "对话生成", "场景描写"]
+                if priority:
+                    order = {name: i for i, name in enumerate(priority)}
+                    def key(a: AIAction):
+                        name = a.title.split('（')[0]
+                        return order.get(name, 999), a.title
+                    actions.sort(key=key)
+        except Exception:
+            pass
+
+        # 需要选区但没有选区的，附带禁用提示
+        final_actions: List[AIAction] = []
+        for a in actions:
+            if a.require_selection and not selected_text:
+                def disabled_handler():
+                    if hasattr(ai_widget, 'show_status'):
+                        ai_widget.show_status("请先选择文本", "warning")
+                final_actions.append(AIAction(id=a.id, title=f"{a.title}（需选区）", handler=disabled_handler, require_selection=True))
+            else:
+                final_actions.append(a)
+
+        dlg.set_actions(final_actions)
         return dlg
 

@@ -128,7 +128,7 @@ class MainWindow(QMainWindow):
         # UI组件
         self.project_tree = None
         self.editor_widget = None
-        self.global_ai_panel = None
+        # 旧的全局 AI 面板已废弃，使用 AI Studio 页面
         self.status_panel = None
         self.document_ai_panel = None
 
@@ -176,91 +176,15 @@ class MainWindow(QMainWindow):
             self.editor_widget = QTextEdit()
             self.editor_widget.setPlaceholderText(EDITOR_PLACEHOLDER)
 
-        # 全局AI面板（使用重构版本）
-        try:
-            # 尝试使用新的重构版本的AI面板
-            try:
-                from src.presentation.widgets.ai.refactored import create_global_ai_panel
-
-                # 获取设置服务
-                settings_service = None
-                if self.controller and hasattr(self.controller, 'settings_service'):
-                    settings_service = self.controller.settings_service
-
-                # 创建全局AI面板
-                self.global_ai_panel = create_global_ai_panel(
-                    ai_service=None,  # AI服务会在工厂中自动获取
-                    parent=self,
-                    settings_service=settings_service
-                )
-                logger.info("✅ 重构版全局AI面板创建成功")
-
-            except Exception as e:
-                logger.error(f"重构版AI面板创建失败: {e}")
-                # 回退到旧版本
-                try:
-                    from src.presentation.widgets.ai import create_global_ai_panel, NEW_COMPONENTS_AVAILABLE
-                    if NEW_COMPONENTS_AVAILABLE and self.controller and hasattr(self.controller, 'ai_service'):
-                        ai_service = self.controller.ai_service
-                        if ai_service:
-                            self.global_ai_panel = create_global_ai_panel(ai_service, self)
-                            logger.info("✅ 旧版全局AI面板创建成功")
-                        else:
-                            raise Exception("AI服务不可用")
-                    else:
-                        raise Exception("旧版AI组件不可用")
-                except Exception as e2:
-                    logger.error(f"旧版AI面板创建失败: {e2}")
-                    self.global_ai_panel = QLabel(f"{AI_PANEL_UNAVAILABLE}: {str(e)}")
-                    logger.error("❌ AI面板创建失败")
-        except Exception as e:
-            logger.error(f"创建全局AI面板失败: {e}")
-            # 最终回退
-            self.global_ai_panel = QLabel(f"{AI_PANEL_UNAVAILABLE}: {str(e)}")
+        # 使用全新的 AI Studio 页面替换旧面板
+        from src.presentation.views.ai_studio_page import AIStudioPage
+        self.ai_studio = AIStudioPage(self, settings_service=getattr(self.controller, 'settings_service', None))
 
         # 状态服务和状态面板
         self.status_service = StatusService()
         self.status_panel = StatusPanelWidget(self.status_service)
 
-        # 文档AI面板容器
-        self.document_ai_container = self._create_document_ai_container()
-
-    def _create_document_ai_container(self):
-        """创建文档AI面板容器"""
-        from PyQt6.QtWidgets import QStackedWidget, QLabel, QVBoxLayout
-        from PyQt6.QtCore import Qt
-
-        # 使用堆叠组件来管理不同状态
-        container = QStackedWidget()
-
-        # 默认状态：显示提示信息
-        default_widget = QWidget()
-        default_layout = QVBoxLayout(default_widget)
-
-        # 提示标签
-        hint_label = QLabel(AI_PANEL_HINT)
-        hint_label.setFont(QFont("Microsoft YaHei UI", 12, QFont.Weight.Bold))
-        hint_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        hint_label.setStyleSheet(HINT_LABEL_STYLE)
-        default_layout.addWidget(hint_label)
-
-        # 说明文本
-        info_label = QLabel(AI_PANEL_INFO)
-        info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        info_label.setStyleSheet(INFO_LABEL_STYLE)
-        default_layout.addWidget(info_label)
-
-        default_layout.addStretch()
-
-        # 添加到堆叠组件
-        container.addWidget(default_widget)
-
-        # 保存引用
-        self.document_ai_default_widget = default_widget
-        self.current_document_ai_panel = None
-
-        return container
-
+    # 旧的文档AI面板容器已废弃
     def _create_central_widget(self):
         """创建中央组件"""
         central_widget = QWidget()
@@ -278,8 +202,17 @@ class MainWindow(QMainWindow):
         # 添加编辑器到中央区域
         main_splitter.addWidget(self.editor_widget)
 
-        # 设置分割器比例
-        main_splitter.setStretchFactor(0, 1)  # 编辑器占用剩余空间
+        # 添加 AI Studio 到右侧
+        try:
+            if not hasattr(self, 'ai_studio'):
+                from src.presentation.views.ai_studio_page import AIStudioPage
+                self.ai_studio = AIStudioPage(self, settings_service=getattr(self.controller, 'settings_service', None))
+            main_splitter.addWidget(self.ai_studio)
+            # 设置分割器比例：编辑器:AI=3:2
+            main_splitter.setStretchFactor(0, 3)
+            main_splitter.setStretchFactor(1, 2)
+        except Exception as e:
+            logger.error(f"加载 AI Studio 失败: {e}")
 
         # 保存引用
         self.main_splitter = main_splitter
@@ -302,11 +235,7 @@ class MainWindow(QMainWindow):
         # 项目停靠窗口
         self.dock_builder.create_project_dock(self, self.project_tree)
 
-        # 右侧标签页停靠窗口（包含AI面板）
-        self.dock_builder.create_tabbed_right_dock(
-            self, self.global_ai_panel, self.document_ai_container
-        )
-
+        # 右侧标签页 Dock 已移除：AI Studio 位于中央主分割器右侧
         # 状态停靠窗口（独立，但在右侧）
         self.dock_builder.create_status_dock(self, self.status_panel)
 
@@ -338,12 +267,10 @@ class MainWindow(QMainWindow):
 
         # 停靠窗口可见性变化
         self.dock_builder.dock_visibility_changed.connect(self._handle_dock_visibility_changed)
-        # 将 AI 面板信号接入 AI 控制台（若存在）
+        # 将 AI Studio 信号接入 AI 控制台（若存在）
         try:
-            if hasattr(self, 'global_ai_panel') and hasattr(self, 'ai_console') and self.global_ai_panel and self.ai_console:
-                self.ai_console.connect_ai_widget(self.global_ai_panel)
-            if hasattr(self, 'current_document_ai_panel') and hasattr(self, 'ai_console') and self.current_document_ai_panel and self.ai_console:
-                self.ai_console.connect_ai_widget(self.current_document_ai_panel)
+            if hasattr(self, 'ai_studio') and hasattr(self, 'ai_console') and self.ai_studio and self.ai_console:
+                self.ai_console.connect_ai_widget(self.ai_studio)
         except Exception as e:
             logger.warning(f"连接 AI 控制台失败: {e}")
 
@@ -368,22 +295,24 @@ class MainWindow(QMainWindow):
             self.editor_widget.content_changed.connect(self._on_content_changed)
         if hasattr(self.editor_widget, 'cursor_position_changed'):
             self.editor_widget.cursor_position_changed.connect(self._update_cursor_position)
-        if hasattr(self.editor_widget, 'selection_changed'):
+            # 同步到文档AI面板用于局部上下文提取
+            # 旧文档AI面板的光标同步已移除        if hasattr(self.editor_widget, 'selection_changed'):
             self.editor_widget.selection_changed.connect(self._on_selection_changed)
         if hasattr(self.editor_widget, 'document_switched'):
             self.editor_widget.document_switched.connect(self._on_document_switched)
         if hasattr(self.editor_widget, 'save_requested'):
             self.editor_widget.save_requested.connect(self.controller.save_document)
 
-        # 全局AI面板信号
-        if hasattr(self.global_ai_panel, 'text_applied'):
-            self.global_ai_panel.text_applied.connect(self._on_ai_text_applied)
-        if hasattr(self.global_ai_panel, 'status_updated'):
-            self.global_ai_panel.status_updated.connect(self._on_ai_status_updated)
-        if hasattr(self.global_ai_panel, 'text_insert_requested'):
-            self.global_ai_panel.text_insert_requested.connect(self._on_ai_text_insert)
-        if hasattr(self.global_ai_panel, 'text_replace_requested'):
-            self.global_ai_panel.text_replace_requested.connect(self._on_ai_text_replace)
+        # AI Studio 信号
+        if hasattr(self, 'ai_studio'):
+            if hasattr(self.ai_studio, 'text_applied'):
+                self.ai_studio.text_applied.connect(self._on_ai_text_applied)
+            if hasattr(self.ai_studio, 'status_changed'):
+                self.ai_studio.status_changed.connect(lambda msg, typ: self._on_ai_status_updated(msg))
+            if hasattr(self.ai_studio, 'text_insert_requested'):
+                self.ai_studio.text_insert_requested.connect(self._on_ai_text_insert)
+            if hasattr(self.ai_studio, 'text_replace_requested'):
+                self.ai_studio.text_replace_requested.connect(self._on_ai_text_replace)
 
         # 控制器信号
         if self.controller:
@@ -525,7 +454,7 @@ class MainWindow(QMainWindow):
             elif action_name == "toggle_project_tree":
                 self.dock_builder.toggle_dock("project")
             elif action_name == "toggle_ai_panel":
-                self.dock_builder.toggle_dock("right_tabs")
+                self._toggle_ai_studio()
             elif action_name == "toggle_status_panel":
                 self.dock_builder.toggle_dock("status")
 
@@ -564,6 +493,24 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.error(f"处理菜单动作失败 {action_name}: {e}")
 
+    def _toggle_ai_studio(self):
+        try:
+            if not hasattr(self, 'ai_studio') or not self.ai_studio:
+                return
+            visible = self.ai_studio.isVisible()
+            self.ai_studio.setVisible(not visible)
+            # 调整分割比例
+            if not visible:
+                if hasattr(self, 'main_splitter'):
+                    self.main_splitter.setStretchFactor(0, 3)
+                    self.main_splitter.setStretchFactor(1, 2)
+            else:
+                if hasattr(self, 'main_splitter'):
+                    self.main_splitter.setStretchFactor(0, 1)
+                    self.main_splitter.setStretchFactor(1, 0)
+        except Exception as e:
+            logger.warning(f"切换 AI Studio 可见性失败: {e}")
+
     def _handle_toolbar_action(self, action_name: str, action_data):
         """处理工具栏动作"""
         # 大部分工具栏动作与菜单动作相同
@@ -575,9 +522,7 @@ class MainWindow(QMainWindow):
         if dock_name == "project":
             self.menu_builder.check_action("toggle_project_tree", visible)
             self.toolbar_builder.check_action("toggle_project_tree", visible)
-        elif dock_name == "right_tabs":
-            self.menu_builder.check_action("toggle_ai_panel", visible)
-            self.toolbar_builder.check_action("toggle_ai_panel", visible)
+        # 右侧 AI 标签页已废弃，改用中心区域 AI Studio
         elif dock_name == "status":
             self.menu_builder.check_action("toggle_status_panel", visible)
         elif dock_name == "ai_console":
@@ -670,19 +615,18 @@ class MainWindow(QMainWindow):
                 if not project:
                     logger.error("项目对象为空")
 
-            # 延迟更新AI面板（重量级操作）
-            if hasattr(self.global_ai_panel, 'set_project'):
+            # 延迟更新 AI Studio（重量级操作）
+            try:
                 from PyQt6.QtCore import QTimer
-                def update_ai_panel():
+                def update_ai_studio():
                     try:
-                        logger.info("🤖 更新全局AI面板")
-                        self.global_ai_panel.set_project(project, {})
-                        logger.debug("✅ 全局AI面板已更新")
+                        if hasattr(self, 'ai_studio') and hasattr(self.ai_studio, 'show_status'):
+                            self.ai_studio.show_status("项目已更新", "success")
                     except Exception as e:
-                        logger.error(f"❌ 更新AI面板失败: {e}")
-
-                # 延迟更新AI面板
-                QTimer.singleShot(UI_UPDATE_DELAY_MS, update_ai_panel)
+                        logger.error(f"❌ 更新 AI Studio 失败: {e}")
+                QTimer.singleShot(UI_UPDATE_DELAY_MS, update_ai_studio)
+            except Exception:
+                pass
 
             ui_time = time.time() - start_time
             logger.info(f"⚡ 项目打开事件处理完成，UI响应时间: {ui_time:.3f}s")
@@ -853,96 +797,26 @@ class MainWindow(QMainWindow):
                 logger.error(f"❌ 回退同步加载也失败: {e2}")
 
     def update_document_ai_panel(self, document=None):
-        """更新文档AI面板"""
+        """更新 AI Studio 上下文（最终版）"""
         try:
-            if document and self.controller and hasattr(self.controller, 'ai_assistant_manager'):
-                # 获取当前文档的AI助手
-                ai_assistant_manager = self.controller.ai_assistant_manager
-
-                if ai_assistant_manager:
-                    # 创建AI助手
-                    ai_assistant = ai_assistant_manager.create_assistant(document.id)
-
-                    # 创建文档AI面板（使用完整功能版本）
-                    try:
-                        document_type = str(document.type).split('.')[-1] if hasattr(document, 'type') else 'chapter'
-
-                        # 使用新版本的文档AI面板
-                        from src.presentation.widgets.ai import create_document_ai_panel, NEW_COMPONENTS_AVAILABLE
-                        if NEW_COMPONENTS_AVAILABLE:
-                            unified_ai_service = getattr(ai_assistant, 'ai_service', None)
-                            if hasattr(unified_ai_service, 'unified_ai_service'):
-                                unified_ai_service = unified_ai_service.unified_ai_service
-                            new_ai_panel = create_document_ai_panel(unified_ai_service, document.id, document_type)
-                        else:
-                            # 创建简单的占位符
-                            new_ai_panel = QLabel(DOCUMENT_AI_UNAVAILABLE)
-
-                        # 设置文档上下文
-                        if hasattr(document, 'content') and hasattr(new_ai_panel, 'set_document_context'):
-                            try:
-                                new_ai_panel.set_document_context(document.content)
-                            except Exception as e:
-                                logger.debug(f"设置文档上下文失败: {e}")
-
-                        logger.info(f"✅ 完整功能文档AI面板创建成功: {document.id}")
-
-                    except Exception as e:
-                        logger.error(f"创建文档AI面板失败: {e}")
-                        # 回退到简化版本
-                        try:
-                            from PyQt6.QtWidgets import QLabel
-                            new_ai_panel = QLabel(f"文档AI面板\n文档ID: {document.id}\n类型: {document_type}\n错误: {str(e)}")
-                            logger.info("✅ 使用简化文档AI面板作为回退")
-                        except Exception as e2:
-                            logger.error(f"简化文档AI面板也创建失败: {e2}")
-                            from PyQt6.QtWidgets import QLabel
-                            new_ai_panel = QLabel(f"文档AI面板创建失败: {str(e)}")
-
-                    # 如果已经有AI面板，先移除
-                    if self.current_document_ai_panel:
-                        self.document_ai_container.removeWidget(self.current_document_ai_panel)
-                        self.current_document_ai_panel.deleteLater()
-
-                    # 添加新的AI面板
-                    self.document_ai_container.addWidget(new_ai_panel)
-                    self.document_ai_container.setCurrentWidget(new_ai_panel)
-
-                    # 保存引用
-                    self.current_document_ai_panel = new_ai_panel
-
-                    # 连接信号
-                    if hasattr(new_ai_panel, 'text_insert_requested'):
-                        new_ai_panel.text_insert_requested.connect(self._on_ai_text_applied)
-                    if hasattr(new_ai_panel, 'text_replace_requested'):
-                        new_ai_panel.text_replace_requested.connect(self._on_ai_text_applied)
-                    # 接入 AI 控制台
-                    try:
-                        if hasattr(self, 'ai_console') and self.ai_console:
-                            self.ai_console.connect_ai_widget(new_ai_panel)
-                    except Exception as e:
-                        logger.debug(f"连接AI控制台到文档面板失败: {e}")
-
-
-                    logger.info(f"文档AI面板已更新: {document.title}")
-
-            else:
-                # 没有文档时，显示默认状态
-                if hasattr(self, 'document_ai_default_widget'):
-                    self.document_ai_container.setCurrentWidget(self.document_ai_default_widget)
-
-                # 清理当前AI面板
-                if self.current_document_ai_panel:
-                    self.document_ai_container.removeWidget(self.current_document_ai_panel)
-                    self.current_document_ai_panel.deleteLater()
-                    self.current_document_ai_panel = None
-
-                logger.debug("文档AI面板已重置为默认状态")
-
+            if not document:
+                return
+            content = getattr(document, 'content', '') if hasattr(document, 'content') else ''
+            if hasattr(self, 'ai_studio'):
+                if hasattr(self.ai_studio, 'set_document_context'):
+                    self.ai_studio.set_document_context(content)
+                # 同步当前选区
+                sel = ""
+                try:
+                    current_tab = self.editor_widget.get_current_tab()
+                    if current_tab and hasattr(current_tab, 'text_edit'):
+                        sel = current_tab.text_edit.textCursor().selectedText() or ""
+                except Exception:
+                    sel = ""
+                if hasattr(self.ai_studio, 'set_selected_text'):
+                    self.ai_studio.set_selected_text(sel)
         except Exception as e:
-            logger.error(f"更新文档AI面板失败: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
+            logger.error(f"更新 AI Studio 上下文失败: {e}")
 
     def _on_status_message(self, message: str):
         """处理状态消息"""
@@ -996,16 +870,16 @@ class MainWindow(QMainWindow):
             except Exception:
                 selected_text = ""
 
-            panel = getattr(self, 'current_document_ai_panel', None)
-            if panel is None:
-                # No document panel available
+            # 直接使用 AI Studio
+            ai_widget = getattr(self, 'ai_studio', None)
+            if ai_widget is None:
                 try:
-                    self.statusbar_builder.update_status("没有可用的文档 AI 面板", "warning")
+                    self.statusbar_builder.update_status("AI Studio 未就绪", "warning")
                 except Exception:
                     pass
                 return
 
-            dlg = AIActionPalette.from_document_ai_panel(panel, selected_text)
+            dlg = AIActionPalette.from_ai_widget(ai_widget, selected_text)
 
             # Center the dialog relative to main window
             geo = self.geometry()
@@ -1024,9 +898,10 @@ class MainWindow(QMainWindow):
     def _show_ai_panel(self):
         """显示AI助手面板"""
         try:
-            # 确保AI面板可见
-            self.dock_builder.show_dock("right_tabs")
-            logger.info("AI助手面板已显示")
+            # 聚焦到 AI Studio 页面
+            if hasattr(self, 'ai_studio'):
+                self.ai_studio.setFocus()
+            logger.info("AI Studio 已显示")
 
         except Exception as e:
             logger.error(f"显示AI助手面板失败: {e}")
@@ -1034,15 +909,28 @@ class MainWindow(QMainWindow):
     def _switch_to_ai_mode(self, mode: str):
         """切换AI模式（保留用于兼容性）"""
         try:
-            if hasattr(self.global_ai_panel, f'switch_to_{mode}'):
-                getattr(self.global_ai_panel, f'switch_to_{mode}')()
-
-            # 确保AI面板可见
-            self.dock_builder.show_dock("right_tabs")
-
-            # 切换到全局AI标签页
-            if hasattr(self, 'right_tabs'):
-                self.right_tabs.setCurrentIndex(0)
+            # 切换到 AI Studio 指定页面
+            try:
+                if hasattr(self, 'ai_studio') and hasattr(self.ai_studio, 'nav'):
+                    mapping = {
+                        'writing': 0,
+                        'chat': 1,
+                        'scene': 2,
+                        'optimize': 3,
+                        'outline': 4,
+                        'character': 5,
+                        'world': 6,
+                        'naming': 7,
+                    }
+                    idx = mapping.get(mode, 0)
+                    self.ai_studio.nav.setCurrentRow(idx)
+                    # 确保可见并聚焦
+                    self.ai_studio.setVisible(True)
+                    if hasattr(self, 'main_splitter'):
+                        self.main_splitter.setStretchFactor(0, 3)
+                        self.main_splitter.setStretchFactor(1, 2)
+            except Exception:
+                pass
 
         except Exception as e:
             logger.error(f"切换AI模式失败: {e}")
@@ -1189,17 +1077,22 @@ class MainWindow(QMainWindow):
                 }
 
             try:
-                if hasattr(self.global_ai_panel, 'update_document_context_external'):
-                    selected_text = ""
-                    try:
-                        current_tab = self.editor_widget.get_current_tab()
-                        if current_tab and hasattr(current_tab, 'text_edit'):
-                            selected_text = current_tab.text_edit.textCursor().selectedText() or ""
-                    except Exception:
-                        selected_text = ""
-                    self.global_ai_panel.update_document_context_external(document_id, content, selected_text, doc_type)
-                elif hasattr(self.global_ai_panel, 'set_context'):
-                    self.global_ai_panel.set_context(content, "", document_id, doc_type)
+                # 将上下文推送到 AI Studio
+                try:
+                    if hasattr(self, 'ai_studio'):
+                        sel = ""
+                        try:
+                            current_tab = self.editor_widget.get_current_tab()
+                            if current_tab and hasattr(current_tab, 'text_edit'):
+                                sel = current_tab.text_edit.textCursor().selectedText() or ""
+                        except Exception:
+                            sel = ""
+                        if hasattr(self.ai_studio, 'set_document_context'):
+                            self.ai_studio.set_document_context(content)
+                        if hasattr(self.ai_studio, 'set_selected_text'):
+                            self.ai_studio.set_selected_text(sel)
+                except Exception as e:
+                    logger.debug(f"更新 AI Studio 上下文失败: {e}")
             except Exception as e:
                 logger.debug(f"更新全局AI面板上下文失败: {e}")
 
@@ -1212,34 +1105,18 @@ class MainWindow(QMainWindow):
                 except Exception as e:
                     logger.debug(f"更新编辑标签文档AI面板上下文失败: {e}")
 
-            # 更新右侧Dock的文档AI面板上下文
-            try:
-                if hasattr(self, 'current_document_ai_panel') and self.current_document_ai_panel:
-                    panel = self.current_document_ai_panel
-                    selected_text = ""
-                    try:
-                        if current_tab and hasattr(current_tab, 'text_edit'):
-                            selected_text = current_tab.text_edit.textCursor().selectedText() or ""
-                    except Exception:
-                        selected_text = ""
-                    if hasattr(panel, 'update_document_context_external'):
-                        panel.update_document_context_external(document_id, content, selected_text)
-                    elif hasattr(panel, 'set_context'):
-                        panel.set_context(content, selected_text)
-            except Exception as e:
-                logger.debug(f"更新右侧文档AI面板上下文失败: {e}")
-
+            # AI Studio 已取代右侧文档AI面板，此同步逻辑删除
         except Exception as e:
             logger.error(f"处理文档内容变化失败: {e}")
 
     def _on_selection_changed(self, document_id: str, selected_text: str):
         """处理选中文字变化"""
         try:
-            # 更新全局AI面板的选中文字
-            if hasattr(self.global_ai_panel, 'set_selected_text'):
-                self.global_ai_panel.set_selected_text(selected_text)
+            # 更新 AI Studio 的选中文字
+            if hasattr(self, 'ai_studio') and hasattr(self.ai_studio, 'set_selected_text'):
+                self.ai_studio.set_selected_text(selected_text)
 
-            # 更新当前文档AI面板的选中文字
+            # 兼容：更新当前文档选区写回逻辑
             current_tab = self.editor_widget.get_current_tab()
             if current_tab and hasattr(current_tab, 'ai_panel') and current_tab.ai_panel:
                 if hasattr(current_tab.ai_panel, 'set_selected_text'):
@@ -1265,52 +1142,52 @@ class MainWindow(QMainWindow):
             logger.error(f"处理文档切换失败: {e}")
 
     def _on_ai_text_insert(self, text: str, position: int = -1):
-        """处理AI文本插入请求"""
+        """处理AI文本插入请求（强制主线程）"""
         try:
-            current_tab = self.editor_widget.get_current_tab()
-            if current_tab:
-                cursor = current_tab.text_edit.textCursor()
+            from src.shared.utils.thread_safety import ensure_main_thread
 
-                if position >= 0:
-                    # 插入到指定位置
-                    cursor.setPosition(position)
+            @ensure_main_thread
+            def do_insert():
+                current_tab = self.editor_widget.get_current_tab()
+                if current_tab:
+                    cursor = current_tab.text_edit.textCursor()
+                    if position == -2:
+                        cursor.movePosition(cursor.MoveOperation.End)
+                    elif position >= 0:
+                        cursor.setPosition(position)
                     current_tab.text_edit.setTextCursor(cursor)
+                    cursor.insertText(text)
+                    current_tab.text_edit.setTextCursor(cursor)
+                    logger.info(f"AI文本已插入: {len(text)} 字符")
 
-                # 插入文本
-                cursor.insertText(text)
-                current_tab.text_edit.setTextCursor(cursor)
-
-                logger.info(f"AI文本已插入: {len(text)} 字符")
-
+            do_insert()
         except Exception as e:
             logger.error(f"AI文本插入失败: {e}")
 
     def _on_ai_text_replace(self, text: str, start_pos: int = -1, end_pos: int = -1):
-        """处理AI文本替换请求"""
+        """处理AI文本替换请求（强制主线程）"""
         try:
-            current_tab = self.editor_widget.get_current_tab()
-            if current_tab:
-                cursor = current_tab.text_edit.textCursor()
+            from src.shared.utils.thread_safety import ensure_main_thread
 
-                if start_pos >= 0 and end_pos >= 0:
-                    # 替换指定范围的文本
-                    cursor.setPosition(start_pos)
-                    cursor.setPosition(end_pos, cursor.MoveMode.KeepAnchor)
-                elif cursor.hasSelection():
-                    # 替换选中的文本
-                    pass
-                else:
-                    # 在当前位置插入
+            @ensure_main_thread
+            def do_replace():
+                current_tab = self.editor_widget.get_current_tab()
+                if current_tab:
+                    cursor = current_tab.text_edit.textCursor()
+                    if start_pos >= 0 and end_pos >= 0:
+                        cursor.setPosition(start_pos)
+                        cursor.setPosition(end_pos, cursor.MoveMode.KeepAnchor)
+                    elif cursor.hasSelection():
+                        pass
+                    else:
+                        cursor.insertText(text)
+                        current_tab.text_edit.setTextCursor(cursor)
+                        return
                     cursor.insertText(text)
                     current_tab.text_edit.setTextCursor(cursor)
-                    return
+                    logger.info(f"AI文本已替换: {len(text)} 字符")
 
-                # 执行替换
-                cursor.insertText(text)
-                current_tab.text_edit.setTextCursor(cursor)
-
-                logger.info(f"AI文本已替换: {len(text)} 字符")
-
+            do_replace()
         except Exception as e:
             logger.error(f"AI文本替换失败: {e}")
 

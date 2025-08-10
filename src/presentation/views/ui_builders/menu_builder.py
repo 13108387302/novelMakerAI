@@ -190,8 +190,8 @@ class MenuBuilder(QObject):
         view_menu.addAction(project_tree_action)
         self.actions["toggle_project_tree"] = project_tree_action
         
-        # AI面板
-        ai_panel_action = QAction("AI面板(&A)", main_window)
+        # AI Studio
+        ai_panel_action = QAction("AI Studio(&A)", main_window)
         ai_panel_action.setCheckable(True)
         ai_panel_action.setChecked(True)
         ai_panel_action.triggered.connect(lambda: self._emit_action("toggle_ai_panel", ai_panel_action))

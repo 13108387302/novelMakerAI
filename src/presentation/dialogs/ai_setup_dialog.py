@@ -310,6 +310,20 @@ class AISetupDialog(QDialog):
         self.enable_streaming.setToolTip("启用后，AI响应将实时显示，提供更好的用户体验")
         output_layout.addRow("", self.enable_streaming)
 
+        self.auto_apply_continue = QCheckBox("续写自动写回到光标处")
+        self.auto_apply_continue.setToolTip("启用后，完成续写会自动把结果插入到当前光标，随时可撤销")
+        output_layout.addRow("", self.auto_apply_continue)
+
+        self.smart_action_sorting = QCheckBox("动作面板智能排序 (Alt+Enter)")
+        self.smart_action_sorting.setToolTip("根据选中内容和光标位置智能调整动作排序")
+        self.show_quick_actions = QCheckBox("显示顶部快捷操作条")
+        self.show_quick_actions.setToolTip("在面板顶部显示常用动作的快捷按钮")
+        self.render_markdown = QCheckBox("输出启用Markdown渲染")
+        self.render_markdown.setToolTip("增强输出可读性：标题/加粗/列表/代码块")
+        output_layout.addRow("", self.smart_action_sorting)
+        output_layout.addRow("", self.show_quick_actions)
+        output_layout.addRow("", self.render_markdown)
+
         layout.addWidget(general_group)
         layout.addWidget(output_group)
 
@@ -375,6 +389,10 @@ AI_DEFAULT_PROVIDER=openai
             self.temperature.setText(str(get('ai.temperature', 0.7)))
             self.timeout.setText(str(get('ai.timeout', 30)))
             self.enable_streaming.setChecked(bool(get('ai.enable_streaming', True)))
+            self.auto_apply_continue.setChecked(bool(get('ai.auto_apply_continue', True)))
+            self.smart_action_sorting.setChecked(bool(get('ai.smart_action_sorting', True)))
+            self.show_quick_actions.setChecked(bool(get('ai.show_quick_actions', True)))
+            self.render_markdown.setChecked(bool(get('ai.render_markdown', True)))
         except Exception as e:
             logger.warning(f"AI设置加载出现异常: {e}")
 
@@ -452,6 +470,10 @@ AI_DEFAULT_PROVIDER=openai
                 'temperature': float(self.temperature.text() or '0.7'),
                 'timeout': int(self.timeout.text() or '30'),
                 'enable_streaming': self.enable_streaming.isChecked(),
+                    'auto_apply_continue': self.auto_apply_continue.isChecked(),
+                    'smart_action_sorting': self.smart_action_sorting.isChecked(),
+                    'show_quick_actions': self.show_quick_actions.isChecked(),
+                    'render_markdown': self.render_markdown.isChecked(),
             }
             try:
                 ss.update_ai_settings(updates)
