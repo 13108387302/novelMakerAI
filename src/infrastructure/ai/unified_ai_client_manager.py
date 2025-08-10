@@ -61,7 +61,24 @@ class UnifiedAIClientManager(BaseUtility):
         self.default_provider = self.config.get('default_provider', 'deepseek')
         
         self.logger.info(f"统一AI客户端管理器初始化完成，默认提供商: {self.default_provider}")
-    
+
+    def update_config(self, config: Dict[str, Any]) -> None:
+        """
+        更新配置
+
+        Args:
+            config: 新的配置信息
+        """
+        if config:
+            self.config.update(config)
+            # 更新相关配置
+            if 'default_provider' in config:
+                self.default_provider = config['default_provider']
+            if 'max_concurrent_requests' in config:
+                max_concurrent = config['max_concurrent_requests']
+                self._semaphore = asyncio.Semaphore(max_concurrent)
+            self.logger.info("配置已更新")
+
     @timed_operation("get_client")
     async def get_client(self, provider: str = None) -> UtilResult[BaseAIClient]:
         """
@@ -326,11 +343,14 @@ class UnifiedAIClientManager(BaseUtility):
 _global_ai_client_manager: Optional[UnifiedAIClientManager] = None
 
 
-def get_unified_ai_client_manager() -> UnifiedAIClientManager:
+def get_unified_ai_client_manager(config: Dict[str, Any] = None) -> UnifiedAIClientManager:
     """获取全局统一AI客户端管理器"""
     global _global_ai_client_manager
     if _global_ai_client_manager is None:
-        _global_ai_client_manager = UnifiedAIClientManager()
+        _global_ai_client_manager = UnifiedAIClientManager(config)
+    elif config and hasattr(_global_ai_client_manager, 'update_config'):
+        # 如果已存在但有新配置，更新配置
+        _global_ai_client_manager.update_config(config)
     return _global_ai_client_manager
 
 

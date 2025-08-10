@@ -18,6 +18,7 @@ from src.domain.repositories.project_repository import IProjectRepository
 from .base_file_repository import BaseFileRepository
 from src.shared.utils.logger import get_logger
 from src.shared.utils.error_handler import handle_async_errors
+from src.shared.utils.file_operations import get_file_operations
 
 logger = get_logger(__name__)
 
@@ -41,17 +42,20 @@ class FileProjectRepository(BaseFileRepository[Project], IProjectRepository):
         entity_name: 实体名称，用于日志和错误信息
     """
 
-    def __init__(self, base_path: Optional[Path] = None):
+    def __init__(self, base_path: Path):
         """
         初始化文件系统项目仓储
 
         Args:
-            base_path: 项目存储的基础路径，默认为用户目录下的.novel_editor/projects
+            base_path: 项目存储的基础路径（必须提供，通常为项目内路径）
         """
         super().__init__(
-            base_path=base_path or Path.home() / ".novel_editor" / "projects",
+            base_path=base_path,
             entity_name="project"
         )
+
+        # 统一文件操作工具
+        self.file_ops = get_file_operations("project_repo")
 
     def _extract_index_info(self, entity_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -129,21 +133,16 @@ class FileProjectRepository(BaseFileRepository[Project], IProjectRepository):
             project_path.mkdir(parents=True, exist_ok=True)
 
             config_file = project_path / "project.json"
-            temp_file = config_file.with_suffix('.tmp')
             project_data = project.to_dict()
 
-            def _save():
-                with open(temp_file, 'w', encoding='utf-8') as f:
-                    json.dump(project_data, f, indent=2, ensure_ascii=False)
-
-                # 验证写入的文件
-                with open(temp_file, 'r', encoding='utf-8') as f:
-                    json.load(f)
-
-                # 原子性替换
-                temp_file.replace(config_file)
-
-            await asyncio.get_event_loop().run_in_executor(None, _save)
+            # 使用统一文件操作工具原子保存
+            await self.file_ops.save_json_atomic(
+                file_path=config_file,
+                data=project_data,
+                create_backup=True,
+                cache_key=f"project:{project.id}:config",
+                cache_ttl=3600
+            )
             logger.info(f"项目保存到自定义路径: {project.name} -> {project_path}")
 
         except Exception as e:
@@ -175,14 +174,13 @@ class FileProjectRepository(BaseFileRepository[Project], IProjectRepository):
 
             # 保存到编辑器目录的索引文件
             index_path = self.base_path / f"{project.id}_index.json"
-            index_path.parent.mkdir(parents=True, exist_ok=True)
-
-            temp_file = index_path.with_suffix('.tmp')
-            with open(temp_file, 'w', encoding='utf-8') as f:
-                json.dump(index_data, f, indent=2, ensure_ascii=False)
-
-            # 原子性替换
-            temp_file.replace(index_path)
+            await self.file_ops.save_json_atomic(
+                file_path=index_path,
+                data=index_data,
+                create_backup=True,
+                cache_key=f"project:{project.id}:index",
+                cache_ttl=3600
+            )
             logger.info(f"项目索引已保存: {index_path}")
 
         except Exception as e:
@@ -248,13 +246,11 @@ class FileProjectRepository(BaseFileRepository[Project], IProjectRepository):
             if not config_file.exists():
                 return None
 
-            def _load():
-                with open(config_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-
-            project_data = await asyncio.get_event_loop().run_in_executor(None, _load)
-
-            # 验证数据格式
+            project_data = await self.file_ops.load_json_cached(
+                file_path=config_file,
+                cache_key=f"project:path:{str(project_path)}",
+                cache_ttl=3600
+            )
             if not isinstance(project_data, dict):
                 logger.error(f"项目配置文件格式无效: {config_file}")
                 return None
@@ -446,7 +442,9 @@ class FileProjectRepository(BaseFileRepository[Project], IProjectRepository):
         """
         导出项目（委托给ImportExportService）
 
-        这个方法主要用于接口兼容性，实际的导出功能应该通过ImportExportService调用。
+        .. deprecated:: 当前版本
+            这个方法主要用于接口兼容性，实际的导出功能应该通过ImportExportService调用。
+            建议直接使用 ImportExportService.export_project() 方法。
 
         Args:
             project_id: 项目ID
@@ -456,6 +454,12 @@ class FileProjectRepository(BaseFileRepository[Project], IProjectRepository):
         Returns:
             bool: 导出是否成功
         """
+        import warnings
+        warnings.warn(
+            "file_project_repository.export_project() 已弃用，请使用 ImportExportService.export_project()",
+            DeprecationWarning,
+            stacklevel=2
+        )
         logger.warning("export_project方法应该通过ImportExportService调用")
 
         # 提供基本的导出功能作为后备
@@ -478,9 +482,16 @@ class FileProjectRepository(BaseFileRepository[Project], IProjectRepository):
                     'exported_at': datetime.now().isoformat()
                 }
 
-                import json
-                with open(export_path, 'w', encoding='utf-8') as f:
-                    json.dump(project_data, f, ensure_ascii=False, indent=2)
+                # 使用统一文件操作保存
+                from pathlib import Path
+                export_path = Path(export_path)
+                await self.file_ops.save_json_atomic(
+                    file_path=export_path,
+                    data=project_data,
+                    create_backup=False,
+                    cache_key=None,
+                    cache_ttl=0
+                )
 
                 logger.info(f"项目导出成功: {export_path}")
                 return True
@@ -496,7 +507,9 @@ class FileProjectRepository(BaseFileRepository[Project], IProjectRepository):
         """
         导入项目（委托给ImportExportService）
 
-        这个方法主要用于接口兼容性，实际的导入功能应该通过ImportExportService调用。
+        .. deprecated:: 当前版本
+            这个方法主要用于接口兼容性，实际的导入功能应该通过ImportExportService调用。
+            建议直接使用 ImportExportService.import_project() 方法。
 
         Args:
             import_path: 导入路径
@@ -505,6 +518,12 @@ class FileProjectRepository(BaseFileRepository[Project], IProjectRepository):
         Returns:
             Optional[Project]: 导入的项目，失败时返回None
         """
+        import warnings
+        warnings.warn(
+            "file_project_repository.import_project() 已弃用，请使用 ImportExportService.import_project()",
+            DeprecationWarning,
+            stacklevel=2
+        )
         logger.warning("import_project方法应该通过ImportExportService调用")
 
         # 提供基本的导入功能作为后备
@@ -515,9 +534,15 @@ class FileProjectRepository(BaseFileRepository[Project], IProjectRepository):
 
             # 简单的JSON导入
             if import_format.lower() in ['json', '.json']:
-                import json
-                with open(import_path, 'r', encoding='utf-8') as f:
-                    project_data = json.load(f)
+                # 使用统一文件操作加载
+                project_data = await self.file_ops.load_json_cached(
+                    file_path=import_path,
+                    cache_key=f"project:import:{str(import_path)}",
+                    cache_ttl=0
+                )
+                if not isinstance(project_data, dict):
+                    logger.error(f"导入文件不是有效的JSON对象: {import_path}")
+                    return None
 
                 # 创建项目对象
                 from src.domain.entities.project import Project, ProjectType, ProjectStatus
@@ -714,11 +739,18 @@ class FileProjectRepository(BaseFileRepository[Project], IProjectRepository):
                 logger.error(f"模板文件不完整: {template_id}")
                 return None
 
-            with open(metadata_file, 'r', encoding='utf-8') as f:
-                template_metadata = json.load(f)
+            # 使用统一文件操作加载模板
+            template_metadata = await self.file_ops.load_json_cached(
+                file_path=metadata_file,
+                cache_key=f"template:{template_id}:metadata",
+                cache_ttl=3600
+            ) or {}
 
-            with open(project_template_file, 'r', encoding='utf-8') as f:
-                project_template = json.load(f)
+            project_template = await self.file_ops.load_json_cached(
+                file_path=project_template_file,
+                cache_key=f"template:{template_id}:project",
+                cache_ttl=3600
+            ) or {}
 
             # 创建项目
             from src.domain.entities.project import create_project, ProjectType
@@ -818,8 +850,13 @@ class FileProjectRepository(BaseFileRepository[Project], IProjectRepository):
 
             # 保存模板元数据
             metadata_file = template_dir / "template.json"
-            with open(metadata_file, 'w', encoding='utf-8') as f:
-                json.dump(template_metadata, f, indent=2, ensure_ascii=False)
+            await self.file_ops.save_json_atomic(
+                file_path=metadata_file,
+                data=template_metadata,
+                create_backup=False,
+                cache_key=f"template:{template_id}:metadata",
+                cache_ttl=0
+            )
 
             # 复制项目结构（不包含具体内容）
             project_template = {
@@ -851,8 +888,13 @@ class FileProjectRepository(BaseFileRepository[Project], IProjectRepository):
 
             # 保存项目模板
             project_template_file = template_dir / "project_template.json"
-            with open(project_template_file, 'w', encoding='utf-8') as f:
-                json.dump(project_template, f, indent=2, ensure_ascii=False)
+            await self.file_ops.save_json_atomic(
+                file_path=project_template_file,
+                data=project_template,
+                create_backup=False,
+                cache_key=f"template:{template_id}:project",
+                cache_ttl=0
+            )
 
             logger.info(f"项目模板保存成功: {template_name} ({template_id})")
             return True
@@ -880,8 +922,11 @@ class FileProjectRepository(BaseFileRepository[Project], IProjectRepository):
 
             # 读取模板元数据（用于日志）
             try:
-                with open(metadata_file, 'r', encoding='utf-8') as f:
-                    metadata = json.load(f)
+                metadata = await self.file_ops.load_json_cached(
+                    file_path=metadata_file,
+                    cache_key=f"template:{template_id}:metadata",
+                    cache_ttl=3600
+                ) or {}
                 template_name = metadata.get("name", template_id)
             except Exception:
                 template_name = template_id
@@ -914,9 +959,13 @@ class FileProjectRepository(BaseFileRepository[Project], IProjectRepository):
                     continue
 
                 try:
-                    with open(metadata_file, 'r', encoding='utf-8') as f:
-                        metadata = json.load(f)
-                    templates.append(metadata)
+                    metadata = await self.file_ops.load_json_cached(
+                        file_path=metadata_file,
+                        cache_key=f"template:{template_dir.name}:metadata",
+                        cache_ttl=3600
+                    )
+                    if metadata:
+                        templates.append(metadata)
                 except Exception as e:
                     logger.warning(f"读取模板元数据失败 {template_dir}: {e}")
                     continue

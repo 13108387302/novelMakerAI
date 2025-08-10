@@ -16,7 +16,8 @@ from enum import Enum
 from datetime import datetime, timedelta
 from collections import defaultdict, deque
 
-from src.application.services.ai.intelligence.deep_context_analyzer import DeepContextAnalyzer, WritingContext
+from src.application.services.ai.intelligence.deep_context_analyzer import WritingContext
+from src.application.services.ai.intelligence.singleton import get_deep_context_analyzer
 from src.application.services.ai.intelligence.intelligent_prompt_builder import IntelligentPromptBuilder
 from src.shared.utils.logger import get_logger
 
@@ -102,9 +103,9 @@ class IntelligentWritingAssistant:
     
     def __init__(self):
         # 核心分析组件
-        self._context_analyzer = DeepContextAnalyzer()
+        self._context_analyzer = get_deep_context_analyzer()
         self._prompt_builder = IntelligentPromptBuilder(self._context_analyzer)
-        
+
         # 建议系统
         self._suggestions: Dict[str, WritingSuggestion] = {}
         self._suggestion_history: deque = deque(maxlen=1000)

@@ -239,7 +239,7 @@ class IntelligentAIPanel(BaseAIWidget):
         }
         
         for label in self.stats_labels.values():
-            label.setStyleSheet(f"color: {self.colors['text']}; font-weight: bold;")
+            label.setStyleSheet(f"color: {self.colors['text_primary']}; font-weight: bold;")
             stats_layout.addWidget(label)
             stats_layout.addWidget(QLabel("|"))  # 分隔符
         
@@ -270,7 +270,7 @@ class IntelligentAIPanel(BaseAIWidget):
         # 输出标题
         output_title = QLabel("💬 AI响应")
         output_title.setFont(QFont("Microsoft YaHei", 11, QFont.Weight.Bold))
-        output_title.setStyleSheet(f"color: {self.colors['text']}; margin-top: 8px;")
+        output_title.setStyleSheet(f"color: {self.colors['text_primary']}; margin-top: 8px;")
         self.main_layout.addWidget(output_title)
         
         # 输出文本区域

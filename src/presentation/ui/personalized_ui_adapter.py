@@ -129,11 +129,11 @@ class PersonalizedUIAdapter(QObject):
     preferences_updated = pyqtSignal(dict)             # 偏好更新
     recommendation_available = pyqtSignal(str, str)    # 推荐可用
     
-    def __init__(self, config_path: Optional[Path] = None):
+    def __init__(self, config_path: Path):
         super().__init__()
-        
-        # 配置路径
-        self.config_path = config_path or Path.home() / ".ai_novel_editor" / "ui_preferences.json"
+
+        # 配置路径（必须提供，通常为项目内路径）
+        self.config_path = config_path
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
         
         # 用户偏好

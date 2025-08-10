@@ -372,20 +372,26 @@ class BaseFormatHandler(IFormatHandler):
             return False
 
     def _read_file_content(self, file_path: Path, encoding: str = "utf-8") -> Optional[str]:
-        """读取文件内容"""
+        """读取文件内容（统一实现）"""
         try:
-            with open(file_path, 'r', encoding=encoding) as f:
-                return f.read()
+            from src.shared.utils.file_operations import get_file_operations
+            ops = get_file_operations("import_export")
+            # 优先安全读取（带编码回退）
+            import asyncio
+            loop = asyncio.get_event_loop()
+            return loop.run_until_complete(ops.load_text_safe(file_path))
         except Exception as e:
             self.logger.error(f"读取文件失败: {e}")
             return None
 
     def _write_file_content(self, file_path: Path, content: str, encoding: str = "utf-8") -> bool:
-        """写入文件内容"""
+        """写入文件内容（统一原子写入）"""
         try:
-            with open(file_path, 'w', encoding=encoding) as f:
-                f.write(content)
-            return True
+            from src.shared.utils.file_operations import get_file_operations
+            ops = get_file_operations("import_export")
+            import asyncio
+            loop = asyncio.get_event_loop()
+            return loop.run_until_complete(ops.save_text_atomic(file_path, content, create_backup=True))
         except Exception as e:
             self.logger.error(f"写入文件失败: {e}")
             return False

@@ -41,10 +41,10 @@ class AIWidgetSignals(QObject):
 class BaseAIWidget(QWidget):
     """
     基础AI组件
-    
+
     提供AI组件的基础功能和通用接口
     """
-    
+
     def __init__(self, parent=None):
         """
         初始化基础AI组件
@@ -100,7 +100,7 @@ class BaseAIWidget(QWidget):
             'info': '#0078D4',
             'background': '#FFFFFF',
             'border': '#E1E1E1',
-            'text': '#323130',
+            'text_primary': '#323130',
             'text_secondary': '#605E5C'
         }
         
@@ -132,7 +132,7 @@ class BaseAIWidget(QWidget):
                     border-radius: 4px;
                     padding: 8px;
                     background-color: {self.colors['background']};
-                    color: {self.colors['text']};
+                    color: {self.colors['text_primary']};
                 }}
                 QTextEdit:focus, QLineEdit:focus {{
                     border-color: {self.colors['primary']};
@@ -215,7 +215,7 @@ class BaseAIWidget(QWidget):
     ) -> None:
         """
         设置上下文信息
-        
+
         Args:
             document_context: 文档上下文
             selected_text: 选中文字
@@ -226,10 +226,31 @@ class BaseAIWidget(QWidget):
         self.selected_text = selected_text
         self.document_id = document_id
         self.document_type = document_type
-        
+
         # 通知子类上下文已更新
         self._on_context_updated()
-    
+
+    # 统一对外的上下文更新接口，供编辑器等外部组件调用
+    def update_document_context_external(
+        self,
+        document_id: Optional[str],
+        content: str,
+        selected_text: str = "",
+        document_type: Optional[str] = None
+    ) -> None:
+        try:
+            if document_type is None:
+                document_type = self.document_type or "chapter"
+            self.set_context(
+                document_context=content or "",
+                selected_text=selected_text or "",
+                document_id=document_id,
+                document_type=document_type,
+            )
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"更新AI上下文失败: {e}")
+
     def _on_context_updated(self) -> None:
         """上下文更新回调（子类可重写）"""
         pass

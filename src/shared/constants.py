@@ -82,6 +82,9 @@ MIN_WINDOW_HEIGHT = 800                # 像素
 DEFAULT_STATUS_TIMEOUT = 3000          # 状态消息超时时间（毫秒）
 UI_UPDATE_DELAY_MS = 200               # UI更新延迟（毫秒）
 DOCUMENT_LOAD_DELAY_MS = 50            # 文档加载延迟（毫秒）
+OPEN_DOCUMENT_DEBOUNCE_SECONDS = 1.0   # 文档打开防抖时间（秒）
+OPEN_PROJECT_TIMEOUT_SECONDS = 10.0    # 项目打开超时时间（秒）
+UI_OPEN_DOCUMENT_DELAY_MS = 500        # UI打开文档延迟（毫秒）
 
 # 主题设置
 DEFAULT_THEME = "default"
@@ -212,13 +215,8 @@ SHORTCUTS = {
     "help": "F1"
 }
 
-# 配置文件路径
-CONFIG_DIR = Path.home() / ".ainovel"
-CONFIG_FILE = CONFIG_DIR / "config.json"
-LOG_DIR = CONFIG_DIR / "logs"
-BACKUP_DIR = CONFIG_DIR / "backups"
-CACHE_DIR = CONFIG_DIR / "cache"
-PLUGINS_DIR = CONFIG_DIR / "plugins"
+# 配置文件路径（已移除硬编码用户目录路径，改为项目内路径）
+# 这些常量已废弃，所有路径现在通过 ProjectPaths 提供
 
 # 网络设置
 DEFAULT_TIMEOUT = 30                   # 秒

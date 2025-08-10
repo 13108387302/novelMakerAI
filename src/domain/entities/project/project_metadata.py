@@ -202,10 +202,61 @@ class ProjectMetadata:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'ProjectMetadata':
         """从字典创建元数据"""
-        # 处理枚举类型
-        language = ProjectLanguage(data.get("language", ProjectLanguage.ZH_CN.value))
-        priority = ProjectPriority(data.get("priority", ProjectPriority.NORMAL.value))
-        visibility = ProjectVisibility(data.get("visibility", ProjectVisibility.PRIVATE.value))
+        # 处理枚举类型（兼容大小写与直接枚举值）
+        lang_val = data.get("language", ProjectLanguage.ZH_CN.value)
+        if isinstance(lang_val, ProjectLanguage):
+            language = lang_val
+        else:
+            try:
+                language = ProjectLanguage(lang_val)
+            except Exception:
+                # 兼容传入中文或大小写不同的值
+                normalized = str(lang_val).strip()
+                mapping = {
+                    "zh_cn": ProjectLanguage.ZH_CN,
+                    "zh_cn": ProjectLanguage.ZH_CN,
+                    "zh-CN": ProjectLanguage.ZH_CN,
+                    "中文": ProjectLanguage.ZH_CN,
+                }
+                language = mapping.get(normalized, ProjectLanguage.ZH_CN)
+
+        prio_val = data.get("priority", ProjectPriority.NORMAL.value)
+        if isinstance(prio_val, ProjectPriority):
+            priority = prio_val
+        else:
+            try:
+                priority = ProjectPriority(prio_val)
+            except Exception:
+                normalized = str(prio_val).strip().lower()
+                prio_map = {
+                    "low": ProjectPriority.LOW,
+                    "normal": ProjectPriority.NORMAL,
+                    "high": ProjectPriority.HIGH,
+                    "urgent": ProjectPriority.URGENT,
+                    "低": ProjectPriority.LOW,
+                    "普通": ProjectPriority.NORMAL,
+                    "高": ProjectPriority.HIGH,
+                    "紧急": ProjectPriority.URGENT,
+                }
+                priority = prio_map.get(normalized, ProjectPriority.NORMAL)
+
+        vis_val = data.get("visibility", ProjectVisibility.PRIVATE.value)
+        if isinstance(vis_val, ProjectVisibility):
+            visibility = vis_val
+        else:
+            try:
+                visibility = ProjectVisibility(vis_val)
+            except Exception:
+                normalized = str(vis_val).strip().lower()
+                vis_map = {
+                    "private": ProjectVisibility.PRIVATE,
+                    "shared": ProjectVisibility.SHARED,
+                    "public": ProjectVisibility.PUBLIC,
+                    "私有": ProjectVisibility.PRIVATE,
+                    "共享": ProjectVisibility.SHARED,
+                    "公开": ProjectVisibility.PUBLIC,
+                }
+                visibility = vis_map.get(normalized, ProjectVisibility.PRIVATE)
         
         # 处理日期
         publication_date = None

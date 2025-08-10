@@ -7,7 +7,7 @@
 """
 
 import os
-import threading
+# threading 导入已移除，不再需要全局锁
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 
@@ -375,24 +375,27 @@ class Settings(BaseSettings):
 
             config_dict = convert_paths(config_dict)
 
-            # 使用临时文件确保原子性写入
-            temp_file = file_path.with_suffix(TEMP_FILE_SUFFIX)
+            # 使用统一文件操作进行原子性写入
+            from src.shared.utils.file_operations import get_file_operations
+            ops = get_file_operations("settings")
+            # 线程安全地调用异步保存
             try:
-                with open(temp_file, 'w', encoding=DEFAULT_ENCODING) as f:
-                    json.dump(config_dict, f, indent=2, ensure_ascii=False)
-
-                # 验证写入的文件
-                with open(temp_file, 'r', encoding=DEFAULT_ENCODING) as f:
-                    json.load(f)  # 验证JSON格式
-
-                # 原子性替换
-                temp_file.replace(file_path)
-
-            except Exception:
-                # 清理临时文件
-                if temp_file.exists():
-                    temp_file.unlink()
-                raise
+                import asyncio, threading
+                asyncio.get_running_loop()
+                result_ref = {}
+                def runner():
+                    try:
+                        result_ref['ok'] = asyncio.run(ops.save_json_atomic(file_path, config_dict, create_backup=True))
+                    except Exception as e:
+                        result_ref['error'] = e
+                t = threading.Thread(target=runner, daemon=True)
+                t.start(); t.join()
+                if 'error' in result_ref:
+                    raise result_ref['error']
+            except RuntimeError:
+                # 无运行中事件循环
+                import asyncio
+                asyncio.run(ops.save_json_atomic(file_path, config_dict, create_backup=True))
 
         except Exception as e:
             raise IOError(f"保存配置文件失败: {e}") from e
@@ -406,16 +409,19 @@ class Settings(BaseSettings):
             return cls()
 
         try:
-            with open(file_path, 'r', encoding=DEFAULT_ENCODING) as f:
-                config_dict = json.load(f)
-
-            # 验证配置数据的基本结构
+            # 使用统一文件操作进行读取
+            from src.shared.utils.file_operations import get_file_operations
+            import asyncio
+            ops = get_file_operations("settings")
+            loop = asyncio.get_event_loop()
+            config_dict = loop.run_until_complete(ops.load_json_cached(file_path))
+            if not config_dict:
+                return cls()
             if not isinstance(config_dict, dict):
                 raise ValueError("配置文件格式无效：根对象必须是字典")
-
             return cls(**config_dict)
 
-        except (json.JSONDecodeError, ValueError, TypeError) as e:
+        except (ValueError, TypeError) as e:
             # 配置文件损坏，返回默认配置
             print(f"警告：配置文件损坏 ({e})，使用默认配置")
             return cls()
@@ -465,115 +471,91 @@ class Settings(BaseSettings):
         return errors
 
 
-# 全局设置实例缓存和锁
-_settings_instance: Optional[Settings] = None
-_settings_lock = threading.Lock()
+# 全局单例已移除，现在只支持项目作用域的设置
 
 
-def get_settings() -> Settings:
-    """
-    获取设置实例（线程安全的单例模式）
-
-    使用延迟加载和单例模式，避免模块导入时的副作用。
-    使用线程锁确保多线程环境下的安全性。
-
-    Returns:
-        Settings: 配置实例
-    """
-    global _settings_instance
-
-    # 双重检查锁定模式
-    if _settings_instance is None:
-        with _settings_lock:
-            if _settings_instance is None:
-                # 配置文件现在位于项目根目录下的 .novel_editor 目录中
-                project_root = Path(__file__).parent.parent
-                config_file = project_root / CONFIG_DIR_NAME / CONFIG_FILE_NAME
-
-                try:
-                    if config_file.exists():
-                        _settings_instance = Settings.load_from_file(config_file)
-                    else:
-                        _settings_instance = Settings()
-                        # 确保配置目录存在
-                        config_file.parent.mkdir(parents=True, exist_ok=True)
-                        # 保存默认配置
-                        _settings_instance.save_to_file(config_file)
-                except Exception as e:
-                    print(f"加载配置失败，使用默认配置: {e}")
-                    _settings_instance = Settings()
-
-    return _settings_instance
+# ——— 新增：项目作用域的设置/DB辅助函数 ———
+_project_settings_cache: dict[str, Settings] = {}
 
 
-def reset_settings():
-    """重置设置实例（主要用于测试）"""
-    global _settings_instance
-    with _settings_lock:
-        _settings_instance = None
+def get_settings_for_project(project_root: Path) -> Settings:
+    """按项目根路径加载/缓存配置，存放于项目内 .novel_editor/config.json。"""
+    from src.shared.project_context import ProjectPaths, ensure_project_dirs
 
+    root = Path(project_root).resolve()
+    key = str(root)
+    cached = _project_settings_cache.get(key)
+    if cached:
+        return cached
 
-def reload_settings() -> Settings:
-    """
-    重新加载设置配置
+    paths = ProjectPaths(root)
+    ensure_project_dirs(paths)
+    config_file = paths.config_file
 
-    强制重新读取配置文件，更新全局设置实例
-
-    Returns:
-        Settings: 重新加载的配置实例
-    """
-    global _settings_instance
-
-    with _settings_lock:
-        # 强制重置实例
-        _settings_instance = None
-
-        # 重新加载配置
-        project_root = Path(__file__).parent.parent
-        config_file = project_root / CONFIG_DIR_NAME / CONFIG_FILE_NAME
-
+    try:
+        if config_file.exists():
+            settings = Settings.load_from_file(config_file)
+        else:
+            settings = Settings()
+        # 覆盖项目根路径，确保 Settings.data_dir 指向项目内
         try:
-            if config_file.exists():
-                _settings_instance = Settings.load_from_file(config_file)
-                print(f"✅ 配置已重新加载: {config_file}")
-            else:
-                _settings_instance = Settings()
-                # 确保配置目录存在
-                config_file.parent.mkdir(parents=True, exist_ok=True)
-                # 保存默认配置
-                _settings_instance.save_to_file(config_file)
-                print(f"✅ 创建新的默认配置: {config_file}")
-        except Exception as e:
-            print(f"❌ 重新加载配置失败，使用默认配置: {e}")
-            _settings_instance = Settings()
+            settings.project_root = root
+        except Exception:
+            pass
+        # 保存回项目配置
+        settings.save_to_file(config_file)
+    except Exception as e:
+        print(f"项目设置加载失败，使用默认配置: {e}")
+        settings = Settings()
+        try:
+            settings.project_root = root
+        except Exception:
+            pass
 
-    return _settings_instance
+    _project_settings_cache[key] = settings
+    return settings
 
 
-def update_ai_provider(provider: str) -> bool:
+def db_url_for_project(project_root: Path) -> str:
+    """返回项目内 SQLite 数据库 URL（如需数据库）。"""
+    from src.shared.project_context import ProjectPaths, ensure_project_dirs
+
+    paths = ProjectPaths(Path(project_root))
+    ensure_project_dirs(paths)
+    return f"sqlite:///{paths.sqlite_db.as_posix()}"
+
+
+# reset_settings 函数已移除，现在使用项目作用域的设置
+
+
+# reload_settings 函数已移除，现在使用项目作用域的设置
+
+
+def update_ai_provider_for_project(project_root: Path, provider: str) -> bool:
     """
-    动态更新AI提供商
+    动态更新项目的AI提供商
 
     Args:
+        project_root: 项目根目录
         provider: 新的提供商名称 ('openai', 'deepseek')
 
     Returns:
         bool: 是否更新成功
     """
     try:
-        settings = get_settings()
+        settings = get_settings_for_project(project_root)
 
         # 更新提供商
         old_provider = settings.ai_service.default_provider
         settings.ai_service.default_provider = provider
 
-        # 保存到文件
-        project_root = Path(__file__).parent.parent
-        config_file = project_root / CONFIG_DIR_NAME / CONFIG_FILE_NAME
-        config_file.parent.mkdir(parents=True, exist_ok=True)
-        settings.save_to_file(config_file)
+        # 保存到项目配置文件
+        from src.shared.project_context import ProjectPaths, ensure_project_dirs
+        paths = ProjectPaths(project_root)
+        ensure_project_dirs(paths)
+        settings.save_to_file(paths.config_file)
 
-        print(f"🔄 AI提供商已从 {old_provider} 更新为 {provider}")
+        print(f"🔄 项目AI提供商已从 {old_provider} 更新为 {provider}")
 
         # 通知AI客户端管理器重新加载配置
         _notify_ai_config_change()
@@ -581,7 +563,7 @@ def update_ai_provider(provider: str) -> bool:
         return True
 
     except Exception as e:
-        print(f"❌ 更新AI提供商失败: {e}")
+        print(f"❌ 更新项目AI提供商失败: {e}")
         return False
 
 

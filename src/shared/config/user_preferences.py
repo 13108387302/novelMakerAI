@@ -27,12 +27,12 @@ USER_PREFERENCES_FILE = "user_preferences.json"
 class UserPreferences(BaseConfigManager):
     """用户偏好设置管理器"""
 
-    def __init__(self, config_dir: Optional[Path] = None):
+    def __init__(self, config_dir: Path):
         """
         初始化用户偏好设置管理器
 
         Args:
-            config_dir: 配置文件目录，如果为None则使用默认目录
+            config_dir: 配置文件目录（必须提供，通常为项目内路径）
         """
         # 调用父类构造函数
         super().__init__(config_dir)
@@ -130,9 +130,9 @@ class UserPreferences(BaseConfigManager):
 # 全局实例
 _user_preferences = None
 
-def get_user_preferences() -> UserPreferences:
-    """获取全局用户偏好设置实例"""
+def get_user_preferences(config_dir: Path) -> UserPreferences:
+    """获取用户偏好设置实例（基于项目配置目录）"""
     global _user_preferences
     if _user_preferences is None:
-        _user_preferences = UserPreferences()
+        _user_preferences = UserPreferences(config_dir)
     return _user_preferences

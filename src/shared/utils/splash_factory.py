@@ -249,26 +249,8 @@ def create_standard_initialization_steps(app_instance) -> List[dict]:
             'message': '初始化核心组件...',
             'action': app_instance._initialize_core_components
         },
-        {
-            'name': 'dependencies',
-            'message': '注册服务依赖...',
-            'action': app_instance._register_dependencies
-        },
-        {
-            'name': 'services',
-            'message': '初始化应用服务...',
-            'action': app_instance._initialize_services
-        },
-        {
-            'name': 'ui',
-            'message': '创建用户界面...',
-            'action': app_instance._create_ui
-        },
-        {
-            'name': 'theme',
-            'message': '应用主题样式...',
-            'action': lambda: app_instance._apply_theme() or True
-        },
+        # 依赖注册和服务初始化现在在项目上下文初始化后进行
+        # UI创建和主题应用现在在项目上下文初始化后进行
         {
             'name': 'async_loop',
             'message': '设置异步事件循环...',

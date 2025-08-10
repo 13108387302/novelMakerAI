@@ -60,6 +60,10 @@ try:
         analyze_text, clean_text, format_text
     )
 
+    # 注意：FileManager与以下便捷函数仅为向后兼容的导出，
+    # 新代码请使用 src.shared.utils.file_operations.UnifiedFileOperations
+    # 通过 get_file_operations() 获取统一的 I/O 能力（原子写入、编码回退、缓存）。
+
     # 文件操作工具
     from .file_utils import (
         FileManager, FileInfo,

@@ -11,11 +11,13 @@ import json
 import shutil
 from pathlib import Path
 from typing import Any, Dict, Optional
+import threading
+import asyncio
 from datetime import datetime
 from abc import ABC, abstractmethod
 
 from src.shared.utils.logger import get_logger
-from src.shared.constants import CONFIG_DIR
+# CONFIG_DIR 已移除，现在使用项目内配置目录
 
 logger = get_logger(__name__)
 
@@ -41,14 +43,14 @@ class BaseConfigManager(ABC):
     - get_config_file_name(): 返回配置文件名
     """
     
-    def __init__(self, config_dir: Optional[Path] = None):
+    def __init__(self, config_dir: Path):
         """
         初始化配置管理器
-        
+
         Args:
-            config_dir: 配置文件目录，如果为None则使用默认目录
+            config_dir: 配置文件目录（必须提供，通常为项目内路径）
         """
-        self.config_dir = config_dir or self._get_default_config_dir()
+        self.config_dir = config_dir
         self.config_file = self.config_dir / self.get_config_file_name()
         
         # 备份目录
@@ -72,8 +74,8 @@ class BaseConfigManager(ABC):
         pass
     
     def _get_default_config_dir(self) -> Path:
-        """获取默认配置目录"""
-        return CONFIG_DIR
+        """获取默认配置目录（已废弃，现在必须显式提供配置目录）"""
+        raise RuntimeError("配置目录必须显式提供，不再支持默认配置目录")
     
     def _ensure_config_dir(self) -> None:
         """确保配置目录存在"""
@@ -83,17 +85,40 @@ class BaseConfigManager(ABC):
             logger.error(f"创建配置目录失败: {e}")
             raise
     
+    def _run_coro_blocking(self, coro):
+        """在当前线程安全地运行协程，无论事件循环是否已在运行"""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            # 没有运行中的事件循环，直接运行
+            return asyncio.run(coro)
+        # 有运行中的事件循环，改用线程执行避免嵌套循环错误
+        result_ref: Dict[str, Any] = {}
+        def runner():
+            try:
+                result_ref['result'] = asyncio.run(coro)
+            except Exception as e:
+                result_ref['error'] = e
+        t = threading.Thread(target=runner, daemon=True)
+        t.start()
+        t.join()
+        if 'error' in result_ref:
+            raise result_ref['error']
+        return result_ref.get('result')
+
     def _load_config(self) -> None:
         """加载配置"""
         try:
             if self.config_file.exists():
-                with open(self.config_file, 'r', encoding='utf-8') as f:
-                    loaded_config = json.load(f)
-                
+                # 统一读取 JSON（线程安全地调用异步实现）
+                from src.shared.utils.file_operations import get_file_operations
+                ops = get_file_operations("config")
+                loaded_config = self._run_coro_blocking(ops.load_json_cached(self.config_file))
+                if loaded_config is None:
+                    raise ValueError("配置文件读取失败")
                 # 验证数据格式
                 if not isinstance(loaded_config, dict):
                     raise ValueError("配置文件格式无效：根对象必须是字典")
-                
                 # 合并默认配置和用户配置
                 self.config_data = self._merge_config(self.get_default_config(), loaded_config)
                 logger.debug(f"配置加载成功: {self.config_file}")
@@ -102,7 +127,7 @@ class BaseConfigManager(ABC):
                 self.config_data = self.get_default_config().copy()
                 self._save_config()
                 logger.debug("使用默认配置并保存")
-                
+
         except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as e:
             logger.error(f"配置文件格式错误: {e}")
             self._repair_corrupted_config()
@@ -130,9 +155,13 @@ class BaseConfigManager(ABC):
             # 备份损坏的文件
             if self.config_file.exists():
                 backup_file = self.backup_dir / f"{self.get_config_file_name()}.corrupted.{datetime.now().strftime('%Y%m%d_%H%M%S')}.bak"
-                shutil.copy2(self.config_file, backup_file)
+                try:
+                    import shutil
+                    shutil.copy2(self.config_file, backup_file)
+                except Exception as e:
+                    logger.warning(f"备份损坏配置失败: {e}")
                 logger.info(f"已备份损坏的配置文件到: {backup_file}")
-            
+
             # 创建新的默认配置
             self.config_data = self.get_default_config().copy()
             success = self._save_config()
@@ -152,28 +181,19 @@ class BaseConfigManager(ABC):
         temp_file = None
         try:
             self._ensure_config_dir()
-            
+
             # 验证配置数据的JSON兼容性
             self._validate_config_for_json()
-            
-            # 先写入临时文件，然后重命名，确保原子性操作
-            temp_file = self.config_file.with_suffix(TEMP_FILE_SUFFIX)
-            with open(temp_file, 'w', encoding='utf-8') as f:
-                json.dump(self.config_data, f, indent=2, ensure_ascii=False)
-            
-            # 验证写入的文件是否有效
-            with open(temp_file, 'r', encoding='utf-8') as f:
-                json.load(f)  # 验证JSON格式
-            
-            # 创建备份（保留最近5个备份）
-            self._create_backup()
-            
-            # 原子性替换
-            temp_file.replace(self.config_file)
-            
-            logger.debug(f"配置保存成功: {self.config_file}")
-            return True
-            
+
+            # 统一文件操作进行原子写入 + 备份（线程安全地调用异步实现）
+            from src.shared.utils.file_operations import get_file_operations
+            ops = get_file_operations("config")
+            ok = self._run_coro_blocking(ops.save_json_atomic(self.config_file, self.config_data, create_backup=True))
+            if ok:
+                logger.debug(f"配置保存成功: {self.config_file}")
+                return True
+            return False
+
         except Exception as e:
             logger.error(f"保存配置失败: {e}")
             # 清理临时文件
@@ -183,7 +203,7 @@ class BaseConfigManager(ABC):
                 except Exception:
                     pass
             return False
-    
+
     def _validate_config_for_json(self) -> None:
         """验证配置数据是否可以序列化为JSON"""
         def check_value(obj, path=""):
@@ -204,11 +224,14 @@ class BaseConfigManager(ABC):
         try:
             if self.config_file.exists():
                 backup_file = self.backup_dir / f"{self.get_config_file_name()}.{datetime.now().strftime('%Y%m%d_%H%M%S')}.bak"
-                shutil.copy2(self.config_file, backup_file)
-                
+                try:
+                    import shutil
+                    shutil.copy2(self.config_file, backup_file)
+                except Exception as e:
+                    logger.warning(f"创建配置备份失败: {e}")
                 # 清理旧备份（保留最近几个）
                 self._cleanup_old_backups(DEFAULT_BACKUP_COUNT)
-                
+
         except Exception as e:
             logger.warning(f"创建配置备份失败: {e}")
     
@@ -322,8 +345,10 @@ class BaseConfigManager(ABC):
                 "config": self.config_data
             }
 
-            with open(export_path, 'w', encoding='utf-8') as f:
-                json.dump(export_data, f, indent=2, ensure_ascii=False)
+            # 统一原子写入导出
+            from src.shared.utils.file_operations import get_file_operations
+            ops = get_file_operations("config_export")
+            self._run_coro_blocking(ops.save_json_atomic(export_path, export_data, create_backup=True))
 
             logger.info(f"配置导出成功: {export_path}")
             return True
@@ -339,8 +364,14 @@ class BaseConfigManager(ABC):
                 logger.error(f"配置文件不存在: {import_path}")
                 return False
 
-            with open(import_path, 'r', encoding='utf-8') as f:
-                import_data = json.load(f)
+            # 统一读取导入 JSON
+            from src.shared.utils.file_operations import get_file_operations
+            import asyncio
+            ops = get_file_operations("config_import")
+            loop = asyncio.get_event_loop()
+            import_data = loop.run_until_complete(ops.load_json_cached(import_path))
+            if import_data is None:
+                return False
 
             # 提取配置数据
             if "config" in import_data:

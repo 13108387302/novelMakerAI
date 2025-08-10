@@ -97,6 +97,11 @@ except ImportError:
     # 向后兼容：如果新架构不可用，使用兼容性包装器
     from src.application.services.ai import get_ai_service
     AIService = get_ai_service
+
+# 新控制器（分层委派）
+from src.presentation.controllers.project_controller import ProjectController
+from src.presentation.controllers.document_controller import DocumentController
+from src.presentation.controllers.ai_controller import AIController
 from src.application.services.settings_service import SettingsService
 from src.application.services.search import SearchService
 from src.application.services.import_export_service import ImportExportService
@@ -151,7 +156,7 @@ class MainController(QObject):
     status_message = pyqtSignal(str)  # 状态消息
     progress_updated = pyqtSignal(int, int)  # 进度更新
     project_tree_refresh_requested = pyqtSignal()  # 项目树刷新请求
-    
+
     def __init__(
         self,
         app_service: ApplicationService,
@@ -185,11 +190,35 @@ class MainController(QObject):
         self.project_service = project_service
         self.document_service = document_service
         self.ai_service = ai_service
+
+        # 先保存依赖，再初始化分层控制器
         self.settings_service = settings_service
         self.search_service = search_service
         self.import_export_service = import_export_service
         self.ai_assistant_manager = ai_assistant_manager
         self._status_service = status_service
+
+        # 新控制器实例（最小接入，不破坏现有流程）
+        self.project_controller = ProjectController(project_service=self.project_service, settings_service=self.settings_service)
+        self.document_controller = DocumentController(document_service=self.document_service)
+        self.ai_controller = AIController(ai_service=self.ai_service)
+
+        # 连接控制器状态/事件到主控制器信号
+        self.project_controller.project_opened.connect(self.project_opened)
+        self.project_controller.project_closed.connect(self.project_closed)
+        self.project_controller.status_message.connect(self.status_message)
+
+        # 统一：文档控制器发出领域事件对象，由主控制器做桥接，向UI层继续发文档对象/简单参数
+        self.document_controller.document_opened.connect(self._on_document_opened_event)
+        self.document_controller.document_saved.connect(self._on_document_saved)
+        self.document_controller.document_closed.connect(self._on_document_closed_event)
+        self.document_controller.document_created.connect(self._on_document_created)
+        self.document_controller.document_deleted.connect(self._on_document_deleted_event)
+        self.document_controller.document_renamed.connect(self._on_document_renamed_event)
+
+
+        self.document_controller.status_message.connect(self.status_message)
+        self.ai_controller.status_message.connect(self.status_message)
 
         # 状态
         self._main_window: Optional['MainWindow'] = None
@@ -214,6 +243,10 @@ class MainController(QObject):
         self._plugin_manager_dialog: Optional[PluginManagerDialog] = None
         self._character_manager_dialog = None
         self._backup_manager_dialog = None
+
+        # 项目树刷新节流
+        self._refresh_timer: Optional[QTimer] = None
+        self._pending_refresh = False
 
         # 设置事件监听
         self._setup_event_listeners()
@@ -321,11 +354,11 @@ class MainController(QObject):
         self.progress_updated.connect(main_window.show_progress)
 
     # 移除重复的cleanup方法定义
-    
+
     # ========================================================================
     # 项目管理
     # ========================================================================
-    
+
     @controller_error_handler("新建项目")
     def new_project(self) -> None:
         """新建项目"""
@@ -370,26 +403,7 @@ class MainController(QObject):
 
 
 
-    def _new_document_sync(self, title: str):
-        """同步新建文档"""
-        try:
-            self.status_message.emit(f"正在创建文档: {title}")
 
-            # 使用同步方式创建文档
-            import asyncio
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-            try:
-                loop.run_until_complete(self._new_document_async(title))
-                self.status_message.emit(f"文档创建成功: {title}")
-                logger.info(f"新建文档成功: {title}")
-            finally:
-                loop.close()
-
-        except Exception as e:
-            logger.error(f"同步新建文档失败: {e}")
-            self._show_error("新建文档失败", str(e))
 
     @async_controller_error_handler("新建文档", log_traceback=True)
     async def _new_document_async(self, title: str) -> None:
@@ -417,7 +431,7 @@ class MainController(QObject):
 
             if document:
                 logger.info(f"文档创建成功: {document.title}")
-                self.status_message.emit(f"文档 '{document.title}' 创建成功")
+                # 状态消息由 DocumentController 发送，避免重复
 
                 # 延迟打开新创建的文档
                 self.async_manager.execute_delayed(
@@ -444,22 +458,24 @@ class MainController(QObject):
     @controller_error_handler("重命名文档")
     def rename_document(self, document_id: str, new_title: str) -> None:
         """重命名文档"""
-        self.async_manager.execute_delayed(
-            self._run_async_rename_document,
-            UI_IMMEDIATE_DELAY,
-            document_id,
-            new_title
-        )
+        def delayed_rename():
+            self._run_async_task(
+                self.document_controller.rename_document(document_id, new_title),
+                success_callback=lambda result: self._show_info("成功", f"文档重命名为: {new_title}"),
+                error_callback=lambda e: self._show_error("重命名失败", f"重命名文档失败: {e}")
+            )
+        self.async_manager.execute_delayed(delayed_rename, UI_IMMEDIATE_DELAY)
 
     @controller_error_handler("复制文档")
     def copy_document(self, document_id: str, new_title: str) -> None:
         """复制文档"""
-        self.async_manager.execute_delayed(
-            self._run_async_copy_document,
-            UI_IMMEDIATE_DELAY,
-            document_id,
-            new_title
-        )
+        def delayed_copy():
+            self._run_async_task(
+                self.document_controller.copy_document(document_id, new_title),
+                success_callback=lambda result: self._show_info("成功", f"文档复制为: {new_title}"),
+                error_callback=lambda e: self._show_error("复制失败", f"复制文档失败: {e}")
+            )
+        self.async_manager.execute_delayed(delayed_copy, UI_IMMEDIATE_DELAY)
 
     def _run_async_delete_document(self, document_id: str):
         """运行异步删除文档操作"""
@@ -470,26 +486,15 @@ class MainController(QObject):
         )
 
     async def _delete_document_async(self, document_id: str) -> None:
-        """异步删除文档"""
+        """异步删除文档（委派到 DocumentController.delete_document）"""
         try:
-            # 删除文档
-            success = await self.document_service.delete_document(document_id)
-
+            success = await self.document_controller.delete_document(document_id)
             if success:
                 logger.info(f"文档删除成功: {document_id}")
-                self.status_message.emit("文档删除成功")
-
-                # 刷新项目树
-                self.project_tree_refresh_requested.emit()
-
-                # 如果当前编辑器中打开的是被删除的文档，关闭它
-                if hasattr(self, '_main_window') and self._main_window:
-                    editor = self._main_window.editor_widget
-                    if hasattr(editor, 'close_document'):
-                        editor.close_document(document_id)
+                # 状态消息由 DocumentController 发送，避免重复
+                self.schedule_refresh_project_tree()
             else:
                 self._show_error("删除文档失败", "无法删除文档")
-
         except Exception as e:
             logger.error(f"异步删除文档失败: {e}")
             self._show_error("删除文档失败", str(e))
@@ -570,11 +575,11 @@ class MainController(QObject):
 
     def _on_document_created_success(self, title: str, document_type: str):
         """文档创建成功回调"""
-        self.status_message.emit(f"{document_type}创建成功: {title}")
+        # 状态消息由 DocumentController 发送，避免重复
         logger.info(f"从项目树创建文档成功: {title}")
         # 延迟刷新项目树，确保文档已完全保存
         from PyQt6.QtCore import QTimer
-        QTimer.singleShot(1000, self._force_refresh_project_tree)  # 1秒后强制刷新
+        self.schedule_refresh_project_tree(1000)  # 1秒后刷新
 
     def _safe_open_document(self, document_id: str):
         """安全的文档打开方法"""
@@ -697,20 +702,29 @@ class MainController(QObject):
                 # 根据文档类型生成默认内容
                 default_content = self._get_default_content_for_type(doc_type)
 
+                # 获取当前项目ID（确保使用正确的项目ID）
+                current_project = self.project_service.get_current_project()
+                if current_project:
+                    actual_project_id = current_project.id
+                    logger.info(f"使用当前项目ID: {actual_project_id} (传入的ID: {project_id})")
+                else:
+                    actual_project_id = project_id
+                    logger.warning(f"无法获取当前项目，使用传入的项目ID: {project_id}")
+
                 # 创建新文档
-                document = await self.document_service.create_document(
+                document = await self.document_controller.create_document(
                     title=title,
                     content=default_content,
-                    project_id=project_id,
+                    project_id=actual_project_id,
                     document_type=doc_type
                 )
 
                 if document:
                     logger.info(f"文档创建成功: {document.title}")
-                    self.status_message.emit(f"文档 '{document.title}' 创建成功")
+                    # 状态消息由 DocumentController 发送，避免重复
 
                     # 立即触发项目树刷新信号
-                    self.project_tree_refresh_requested.emit()
+                    self.schedule_refresh_project_tree()
 
                     # 延迟打开新创建的文档，确保文档已完全保存
                     # 使用线程安全的方式调度文档打开
@@ -760,192 +774,63 @@ class MainController(QObject):
         }
         return templates.get(doc_type, "")
 
-    def _run_async_delete_document(self, document_id: str):
-        """运行异步删除文档任务"""
-        self._run_async_task(
-            self._delete_document_async(document_id),
-            success_callback=lambda result: self._show_info("成功", "文档删除成功"),
-            error_callback=lambda e: self._show_error("删除失败", f"删除文档失败: {e}")
-        )
+    # 统一删除实现：保留上方实现，移除重复定义
+    # （此处原有的重复 _run_async_delete_document/_delete_document_async 已移除）
 
-    async def _delete_document_async(self, document_id: str) -> bool:
-        """异步删除文档"""
-        try:
-            # 确认删除
-            from PyQt6.QtWidgets import QMessageBox
-            reply = QMessageBox.question(
-                self._main_window,
-                "确认删除",
-                "确定要删除这个文档吗？此操作无法撤销。",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No
-            )
 
-            if reply != QMessageBox.StandardButton.Yes:
-                return False
 
-            # 删除文档
-            success = await self.document_service.delete_document(document_id)
-            if success:
-                logger.info(f"文档删除成功: {document_id}")
-                self.status_message.emit("文档删除成功")
 
-                # 刷新项目树
-                self.project_tree_refresh_requested.emit()
-                return True
-            else:
-                self._show_error("删除失败", "无法删除文档")
-                return False
 
-        except Exception as e:
-            logger.error(f"异步删除文档失败: {e}")
-            self._show_error("删除失败", str(e))
-            return False
 
-    def _run_async_rename_document(self, document_id: str, new_title: str):
-        """运行异步重命名文档任务"""
-        self._run_async_task(
-            self._rename_document_async(document_id, new_title),
-            success_callback=lambda result: self._show_info("成功", f"文档重命名为: {new_title}"),
-            error_callback=lambda e: self._show_error("重命名失败", f"重命名文档失败: {e}")
-        )
-
-    async def _rename_document_async(self, document_id: str, new_title: str) -> bool:
-        """异步重命名文档"""
-        try:
-            # 重命名文档
-            success = await self.document_service.update_document_title(document_id, new_title)
-            if success:
-                logger.info(f"文档重命名成功: {document_id} -> {new_title}")
-                self.status_message.emit(f"文档重命名为: {new_title}")
-
-                # 刷新项目树
-                self.project_tree_refresh_requested.emit()
-                return True
-            else:
-                self._show_error("重命名失败", "无法重命名文档")
-                return False
-
-        except Exception as e:
-            logger.error(f"异步重命名文档失败: {e}")
-            self._show_error("重命名失败", str(e))
-            return False
-
-    def _run_async_copy_document(self, document_id: str, new_title: str):
-        """运行异步复制文档任务"""
-        self._run_async_task(
-            self._copy_document_async(document_id, new_title),
-            success_callback=lambda result: self._show_info("成功", f"文档复制为: {new_title}"),
-            error_callback=lambda e: self._show_error("复制失败", f"复制文档失败: {e}")
-        )
-
-    async def _copy_document_async(self, document_id: str, new_title: str) -> bool:
-        """异步复制文档"""
-        try:
-            # 获取原文档
-            original_doc = await self.document_service.get_document(document_id)
-            if not original_doc:
-                self._show_error("复制失败", "找不到原文档")
-                return False
-
-            # 创建新文档
-            new_document = await self.document_service.create_document(
-                title=new_title,
-                content=original_doc.content,
-                project_id=original_doc.project_id,
-                document_type=original_doc.document_type
-            )
-
-            if new_document:
-                logger.info(f"文档复制成功: {document_id} -> {new_document.id}")
-                self.status_message.emit(f"文档复制为: {new_title}")
-
-                # 刷新项目树
-                self.project_tree_refresh_requested.emit()
-                return True
-            else:
-                self._show_error("复制失败", "无法创建新文档")
-                return False
-
-        except Exception as e:
-            logger.error(f"异步复制文档失败: {e}")
-            self._show_error("复制失败", str(e))
-            return False
-
-    async def _create_project_async(self, name: str, project_location: str = None) -> None:
-        """异步创建项目"""
-        try:
-            self.status_message.emit("正在创建项目...")
-
-            project = await self.project_service.create_project(
-                name=name,
-                project_type=ProjectType.NOVEL,
-                description="",
-                author=self.settings_service.get_setting("project.default_author", ""),
-                target_word_count=self.settings_service.get_setting("project.default_target_word_count", 80000),
-                project_path=project_location
-            )
-
-            if project:
-                self.project_opened.emit(project)
-                self.status_message.emit(f"项目创建成功并已打开: {name}")
-                logger.info(f"新建项目已自动打开: {name} ({project.id})")
-                if project.root_path:
-                    logger.info(f"项目保存位置: {project.root_path}")
-
-                # 可选：显示成功提示
-                location_info = f" (位置: {project.root_path})" if project.root_path else ""
-                self._show_success_message("项目创建成功", f"项目 '{name}' 已创建并自动打开{location_info}")
-            else:
-                self._show_error("创建项目失败", "无法创建项目，请检查设置")
-
-        except Exception as e:
-            logger.error(f"异步创建项目失败: {e}")
-            self._show_error("创建项目失败", str(e))
-    
     def create_new_project(self) -> None:
-        """创建新项目"""
+        """创建新项目（统一入口）"""
         try:
-            from PyQt6.QtWidgets import QInputDialog, QMessageBox, QFileDialog
+            from PyQt6.QtWidgets import QInputDialog, QFileDialog
             import os
 
             # 获取项目名称
             name, ok = QInputDialog.getText(
-                None,
+                self._main_window,
                 "新建项目",
                 "请输入项目名称:",
                 text="新项目"
             )
+            if not ok or not name.strip():
+                return
 
-            if ok and name.strip():
-                # 获取项目保存位置
-                default_location = os.path.join(os.getcwd(), "projects")
+            # 选择保存位置
+            default_location = os.path.join(os.getcwd(), "projects")
+            try:
+                os.makedirs(default_location, exist_ok=True)
+            except Exception:
+                default_location = os.path.join(os.path.expanduser("~"), "Documents", "AI小说编辑器")
                 try:
                     os.makedirs(default_location, exist_ok=True)
                 except Exception:
-                    default_location = os.path.join(os.path.expanduser("~"), "Documents", "AI小说编辑器")
-                    try:
-                        os.makedirs(default_location, exist_ok=True)
-                    except Exception:
-                        default_location = os.getcwd()
+                    default_location = os.getcwd()
 
-                project_location = QFileDialog.getExistingDirectory(
-                    self._main_window,
-                    "选择项目保存位置",
-                    default_location
-                )
+            project_location = QFileDialog.getExistingDirectory(
+                self._main_window,
+                "选择项目保存位置",
+                default_location
+            )
+            if not project_location:
+                return
 
-                if project_location:
-                    # 异步创建项目
-                    self._run_async_task(
-                        self._create_project_async(name.strip(), project_location),
-                        success_callback=lambda result: self._show_info("成功", f"项目 '{name}' 创建成功"),
-                        error_callback=lambda e: self._show_error("错误", f"创建项目失败: {e}")
-                    )
-
+            # 走统一服务入口
+            project_info = {
+                "name": name.strip(),
+                "location": project_location,
+                "description": "",
+                "author": self.settings_service.get_setting("project.default_author", ""),
+                "word_count": self.settings_service.get_setting("project.default_target_word_count", 80000),
+                "type": "novel",
+                "template": "空白项目",
+            }
+            self.create_project_via_service(project_info)
         except Exception as e:
             logger.error(f"创建新项目失败: {e}")
-            self._show_error("错误", f"创建项目失败: {e}")
+            self._show_error("错误", f"创建新项目失败: {e}")
 
     @controller_error_handler("保存当前文档", log_traceback=True)
     def save_current_document(self) -> None:
@@ -1001,13 +886,23 @@ class MainController(QObject):
         """保存成功回调"""
         logger.info(f"✅ 文档保存成功: {document_title}")
         self._show_info("成功", f"文档 '{document_title}' 保存成功")
-        self.status_message.emit(f"文档 '{document_title}' 已保存")
+        # 状态消息由 DocumentController 发送，避免重复
 
     def _on_save_error(self, document_title: str, error):
         """保存失败回调"""
         logger.error(f"❌ 文档保存失败: {document_title}, 错误: {error}")
         self._show_error("错误", f"保存文档 '{document_title}' 失败: {error}")
         self.status_message.emit(f"保存失败: {error}")
+
+    def open_project_directory(self, project_dir: Path) -> None:
+        """直接打开指定的项目目录（供应用入口调用）"""
+        try:
+            if not isinstance(project_dir, Path):
+                project_dir = Path(project_dir)
+            QTimer.singleShot(0, lambda: self._run_async_open_project_dir(project_dir))
+        except Exception as e:
+            logger.error(f"通过主控制器打开项目失败: {e}")
+            self._show_error("打开项目失败", str(e))
 
     def open_project_dialog(self) -> None:
         """打开项目对话框"""
@@ -1021,9 +916,8 @@ class MainController(QObject):
             if last_dir and Path(last_dir).exists():
                 default_path = Path(last_dir)
             else:
-                from config.settings import get_settings
-                settings = get_settings()
-                default_path = settings.data_dir / "projects"
+                # 使用当前工作目录作为默认路径，因为现在需要项目上下文
+                default_path = Path.cwd()
 
             # 提供两种打开方式：选择目录或选择文件
             from PyQt6.QtWidgets import QMessageBox
@@ -1213,34 +1107,20 @@ class MainController(QObject):
             self.status_message.emit("正在打开项目...")
             logger.info(f"尝试打开项目文件: {file_path}")
 
-            if file_path.suffix.lower() == '.json':
-                # 检查是否是项目配置文件
-                if file_path.name == 'project.json':
-                    # 直接加载项目文件
-                    project = await self.project_service.open_project_by_path(file_path.parent)
-                else:
-                    # 可能是导出的项目文件
-                    result = await self.import_export_service.import_project(
-                        file_path, "", ImportOptions()
-                    )
-                    project = result.success
+            if file_path.suffix.lower() == '.json' and file_path.name == 'project.json':
+                # 将打开项目统一委派到 ProjectController
+                await self.project_controller.open_project_by_path(file_path.parent)
             else:
-                # 导入项目
+                # 导入项目（导入成功后也走 ProjectController 打开路径）
                 result = await self.import_export_service.import_project(
                     file_path, "", ImportOptions()
                 )
-                project = result.success
-
-            if project:
-                # 保存最近打开的目录（文件的父目录）
-                self.settings_service.set_last_opened_directory(str(file_path.parent))
-
-                self.project_opened.emit(project)
-                self.status_message.emit(f"项目打开成功: {project.title}")
-                logger.info(f"项目打开成功: {project.title} ({project.id})")
-            else:
-                logger.warning(f"项目打开失败: {file_path}")
-                self._show_error("打开项目失败", f"无法打开项目文件: {file_path}")
+                if result.success:
+                    # 假设导入时返回了项目目录或已创建项目，尝试使用返回路径或父目录
+                    project_dir = Path(result.success.root_path) if hasattr(result.success, 'root_path') and result.success.root_path else file_path.parent
+                    await self.project_controller.open_project_by_path(project_dir)
+                else:
+                    self._show_error("打开项目失败", f"无法导入项目文件: {file_path}")
 
         except Exception as e:
             logger.error(f"异步打开项目失败: {e}")
@@ -1272,40 +1152,33 @@ class MainController(QObject):
                 with open(project_config, 'r', encoding='utf-8') as f:
                     import json
                     project_data = json.load(f)
+
+                    # 如果缺少项目ID，自动修复
                     if not project_data.get('id'):
-                        error_msg = f"项目配置文件损坏：\n{project_config}\n\n缺少项目ID"
-                        logger.warning(error_msg)
-                        self._show_error("打开项目失败", error_msg)
-                        return
+                        logger.warning(f"项目配置文件缺少ID，自动修复: {project_config}")
+                        # 使用项目文件夹名称作为ID
+                        project_data['id'] = project_dir.name
+
+                        # 保存修复后的配置文件
+                        with open(project_config, 'w', encoding='utf-8') as f_write:
+                            json.dump(project_data, f_write, ensure_ascii=False, indent=2)
+
+                        logger.info(f"项目配置文件已修复，添加ID: {project_data['id']}")
+
             except Exception as e:
                 error_msg = f"无法读取项目配置文件：\n{project_config}\n\n错误: {e}"
                 logger.warning(error_msg)
                 self._show_error("打开项目失败", error_msg)
                 return
 
-            # 直接通过路径打开项目
-            project = await self.project_service.open_project_by_path(project_dir)
-
-            if project:
-                # 保存最近打开的目录
-                self.settings_service.set_last_opened_directory(str(project_dir))
-
-                # 保存上次打开的项目信息
-                self.settings_service.set_last_project_info(project.id, str(project_dir))
-
-                self.project_opened.emit(project)
-                self.status_message.emit(f"项目打开成功: {project.title}")
-                logger.info(f"项目目录打开成功: {project.title} ({project.id})")
-            else:
-                error_msg = f"无法打开项目目录：\n{project_dir}\n\n项目文件可能已损坏"
-                logger.warning(error_msg)
-                self._show_error("打开项目失败", error_msg)
+            # 直接委派 ProjectController 负责打开与信号
+            await self.project_controller.open_project_by_path(project_dir)
 
         except Exception as e:
             error_msg = f"打开项目目录时发生错误：\n{project_dir}\n\n错误: {e}"
             logger.error(f"异步打开项目目录失败: {e}")
             self._show_error("打开项目失败", error_msg)
-    
+
     def save_current(self) -> None:
         """保存当前项目/文档"""
         try:
@@ -1319,11 +1192,11 @@ class MainController(QObject):
         """保存指定文档"""
         try:
             logger.info(f"开始保存文档: {document.title}")
-            # 使用异步方式保存文档
             # 捕获文档对象，避免闭包问题
             doc = document
+            # 使用文档控制器委派保存
             self._run_async_task(
-                self._save_document_async(document),
+                self.document_controller.save_document(document.id),
                 success_callback=lambda result, d=doc: self._on_document_save_success(d),
                 error_callback=lambda e, d=doc: self._on_document_save_error(d, e)
             )
@@ -1403,34 +1276,15 @@ class MainController(QObject):
     def _on_document_save_success(self, document):
         """文档保存成功回调"""
         logger.info(f"文档保存成功: {document.title}")
-        self.status_message.emit(f"文档 '{document.title}' 保存成功")
+        # 状态消息由 DocumentController 发送，避免重复
 
     def _on_document_save_error(self, document, error):
         """文档保存错误回调"""
         logger.error(f"文档保存失败: {document.title}, {error}")
         self._show_error("保存失败", f"文档 '{document.title}' 保存失败: {str(error)}")
 
-    def _save_current_sync(self):
-        """同步保存当前文档"""
-        try:
-            self.status_message.emit("正在保存...")
 
-            # 使用同步方式保存
-            import asyncio
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
 
-            try:
-                loop.run_until_complete(self._save_current_async())
-                self.status_message.emit("保存成功")
-                logger.info("保存成功")
-            finally:
-                loop.close()
-
-        except Exception as e:
-            logger.error(f"同步保存失败: {e}")
-            self._show_error("保存失败", str(e))
-    
     async def _save_current_async(self) -> None:
         """异步保存当前内容"""
         try:
@@ -1443,7 +1297,7 @@ class MainController(QObject):
             if self.document_service.has_open_documents:
                 success = await self.document_service.save_all_documents()
                 if success:
-                    self.status_message.emit("文档保存成功")
+                    # 状态消息由 DocumentController 发送，避免重复
                     logger.info("所有文档保存成功")
                 else:
                     self._show_error("保存失败", "无法保存文档")
@@ -1453,16 +1307,16 @@ class MainController(QObject):
             if self.project_service.has_current_project:
                 success = await self.project_service.save_current_project()
                 if success:
-                    self.status_message.emit("项目保存成功")
+                    # 状态消息由 ProjectController 发送，避免重复
                     logger.info("项目保存成功")
                 else:
                     self._show_error("保存失败", "无法保存项目")
                     logger.error("项目保存失败")
-                    
+
         except Exception as e:
             logger.error(f"异步保存失败: {e}")
             self._show_error("保存失败", str(e))
-    
+
     def save_as(self) -> None:
         """另存为"""
         try:
@@ -1477,9 +1331,8 @@ class MainController(QObject):
                 return
 
             # 选择保存位置
-            from config.settings import get_settings
-            settings = get_settings()
-            default_path = settings.data_dir / "projects"
+            # 使用当前工作目录作为默认路径
+            default_path = Path.cwd()
 
             file_path, _ = QFileDialog.getSaveFileName(
                 self._main_window,
@@ -1542,13 +1395,12 @@ class MainController(QObject):
         except Exception as e:
             logger.error(f"异步另存为失败: {e}")
             self._show_error("另存为失败", str(e))
-    
+
     def import_project(self) -> None:
         """导入项目"""
         try:
-            from config.settings import get_settings
-            settings = get_settings()
-            default_path = settings.data_dir
+            # 使用当前工作目录作为默认路径
+            default_path = Path.cwd()
 
             file_path, _ = QFileDialog.getOpenFileName(
                 self._main_window,
@@ -1556,19 +1408,23 @@ class MainController(QObject):
                 str(default_path),
                 "支持的格式 (*.json *.zip *.txt *.docx);;所有文件 (*)"
             )
-            
+
             if file_path:
-                QTimer.singleShot(0, lambda: self._run_async_import_project(Path(file_path)))
-                
+                QTimer.singleShot(0, lambda: self._run_async_task(
+                    self._import_project_async(Path(file_path)),
+                    success_callback=lambda _: logger.info(f"项目导入成功: {file_path}"),
+                    error_callback=lambda e: self._show_error("导入项目失败", str(e))
+                ))
+
         except Exception as e:
             logger.error(f"导入项目失败: {e}")
             self._show_error("导入项目失败", str(e))
-    
+
     async def _import_project_async(self, file_path: Path) -> None:
         """异步导入项目"""
         try:
             self.status_message.emit("正在导入项目...")
-            
+
             result = await self.import_export_service.import_project(
                 file_path, "", ImportOptions()
             )
@@ -1576,16 +1432,11 @@ class MainController(QObject):
             if result.success:
                 # 从导入结果中获取项目信息
                 if hasattr(result, 'project') and result.project:
-                    # 设置为当前项目
-                    await self.project_service.set_current_project(result.project)
-
-                    # 发出项目打开信号
-                    self.project_opened.emit(result.project)
-
-                    self.status_message.emit(f"项目 '{result.project.name}' 导入成功")
+                    # 统一由 ProjectController 处理打开与信号
+                    await self.project_controller.open_project_by_path(Path(result.project.root_path))
+                    return
+                    # 已由 ProjectController 打开，无需重复发信号
                     logger.info(f"项目导入成功: {result.project.name}")
-
-                    # 刷新UI
                     self.callback_emitter.emit_callback(self._refresh_project_ui)
 
                 elif hasattr(result, 'imported_items') and result.imported_items:
@@ -1597,7 +1448,7 @@ class MainController(QObject):
                         if project:
                             await self.project_service.set_current_project(project)
                             self.project_opened.emit(project)
-                            self.status_message.emit(f"项目 '{project.name}' 导入成功")
+                            # 状态消息由 ProjectController 发送，避免重复
                         else:
                             self.status_message.emit("项目导入成功，但无法加载项目详情")
                     else:
@@ -1606,7 +1457,7 @@ class MainController(QObject):
                     self.status_message.emit("项目导入成功")
             else:
                 self._show_error("导入失败", "无法导入项目文件")
-                
+
         except Exception as e:
             logger.error(f"异步导入项目失败: {e}")
             self._show_error("导入失败", str(e))
@@ -1637,17 +1488,16 @@ class MainController(QObject):
 
         except Exception as e:
             logger.error(f"刷新项目UI失败: {e}")
-    
+
     def export_project(self) -> None:
         """导出项目"""
         try:
             if not self.project_service.has_current_project:
                 self._show_warning("导出失败", "没有打开的项目")
                 return
-            
-            from config.settings import get_settings
-            settings = get_settings()
-            default_path = settings.data_dir
+
+            # 使用当前工作目录作为默认路径
+            default_path = Path.cwd()
 
             file_path, _ = QFileDialog.getSaveFileName(
                 self._main_window,
@@ -1655,22 +1505,26 @@ class MainController(QObject):
                 str(default_path / f"{self.project_service.current_project.title}.zip"),
                 "ZIP文件 (*.zip);;JSON文件 (*.json);;文本文件 (*.txt)"
             )
-            
+
             if file_path:
-                QTimer.singleShot(0, lambda: self._run_async_export_project(Path(file_path)))
-                
+                QTimer.singleShot(0, lambda: self._run_async_task(
+                    self._export_project_async(Path(file_path)),
+                    success_callback=lambda _: logger.info(f"项目导出成功: {file_path}"),
+                    error_callback=lambda e: self._show_error("导出项目失败", str(e))
+                ))
+
         except Exception as e:
             logger.error(f"导出项目失败: {e}")
             self._show_error("导出项目失败", str(e))
-    
+
     async def _export_project_async(self, file_path: Path) -> None:
         """异步导出项目"""
         try:
             self.status_message.emit("正在导出项目...")
-            
+
             project = self.project_service.current_project
             export_format = file_path.suffix.lower().lstrip('.')
-            
+
             result = await self.import_export_service.export_project(
                 project.id,
                 file_path,
@@ -1679,56 +1533,51 @@ class MainController(QObject):
             )
 
             if result.success:
-                self.status_message.emit(f"项目导出成功: {file_path.name}")
+                # 状态消息由 ProjectController 发送，避免重复
+                pass
             else:
                 error_msg = "; ".join(result.errors) if result.errors else "未知错误"
                 self._show_error("导出失败", error_msg)
-                
+
         except Exception as e:
             logger.error(f"异步导出项目失败: {e}")
             self._show_error("导出失败", str(e))
-    
+
     # ========================================================================
     # 文档管理
     # ========================================================================
-    
+
     def open_document(self, document_id: str) -> None:
         """打开文档"""
         try:
-            import time
-            current_time = time.time()
-
-            # 检查是否正在打开同一个文档
-            if document_id in self._opening_documents:
-                logger.debug(f"文档 {document_id} 正在打开中，跳过重复请求")
-                return
-
-            # 检查是否在短时间内重复打开同一个文档（防抖动）
-            last_time = self._last_open_time.get(document_id, 0)
-            if current_time - last_time < 1.0:  # 1秒内的重复请求
-                logger.debug(f"文档 {document_id} 在1秒内重复打开，跳过")
-                return
-
-            # 记录打开时间和状态
-            self._last_open_time[document_id] = current_time
-            self._opening_documents.add(document_id)
-
-            QTimer.singleShot(0, lambda: self._run_async_open_document(document_id))
+            # 直接委派给 DocumentController，由其处理防抖和去重
+            QTimer.singleShot(0, lambda: self._run_async_task(
+                self.document_controller.open_document(document_id),
+                success_callback=lambda doc: self._on_document_opened_success(doc, document_id) if doc else None,
+                error_callback=lambda e: self._show_error("打开文档失败", str(e))
+            ))
         except Exception as e:
             logger.error(f"打开文档失败: {e}")
             self._show_error("打开文档失败", str(e))
-    
+
     async def _open_document_async(self, document_id: str) -> None:
         """异步打开文档"""
         try:
             document = await self.document_service.open_document(document_id)
 
             if document:
-                # 发送文档打开信号（这个信号会在主线程中处理UI更新）
-                self.document_opened.emit(document)
-
-                # 状态消息也通过信号发送，确保在主线程中更新
-                self.status_message.emit(f"文档已打开: {document.title}")
+                # 发送“领域事件”到UI层（彻底事件化）
+                try:
+                    from src.domain.events.document_events import DocumentOpenedEvent
+                    event = DocumentOpenedEvent(
+                        document_id=getattr(document, 'id', ''),
+                        document_title=getattr(document, 'title', '')
+                    )
+                    self.document_opened.emit(event)
+                except Exception:
+                    # 退化为不带标题的事件
+                    from src.domain.events.document_events import DocumentOpenedEvent
+                    self.document_opened.emit(DocumentOpenedEvent(document_id=document_id, document_title=''))
 
                 # 返回文档对象，让调用者在主线程中处理UI更新
                 return document
@@ -1740,11 +1589,16 @@ class MainController(QObject):
             logger.error(f"异步打开文档失败: {e}")
             self._show_error("打开文档失败", str(e))
             return None
-    
+
     def document_content_changed(self, document_id: str, content: str) -> None:
         """文档内容变更"""
         try:
-            QTimer.singleShot(0, lambda: self._run_async_update_document_content(document_id, content))
+            # 使用文档控制器委派内容更新
+            QTimer.singleShot(0, lambda: self._run_async_task(
+                self.document_controller.update_document_content(document_id, content),
+                success_callback=lambda _: logger.debug(f"文档内容更新成功: {document_id}"),
+                error_callback=lambda e: logger.error(f"异步更新文档内容失败: {e}")
+            ))
         except Exception as e:
             logger.error(f"更新文档内容失败: {e}")
 
@@ -1796,14 +1650,83 @@ class MainController(QObject):
     def _on_project_selected_success(self, project):
         """项目选择成功回调"""
         if project:
+            # 更新最近项目
+            try:
+                from src.shared.managers.recent_projects_manager import get_recent_projects_manager
+                recent_manager = get_recent_projects_manager()
+                if project.root_path:
+                    recent_manager.add_project(Path(project.root_path), project.title)
+            except Exception as e:
+                logger.warning(f"更新最近项目失败: {e}")
+
             self.project_opened.emit(project)
             logger.info(f"项目选择成功: {project.title}")
+
+    @controller_error_handler("创建项目")
+    def create_project_via_service(self, project_info: dict, completion_callback=None) -> Optional[Path]:
+        """通过服务创建项目并打开，统一入口供 StartupWindow/其他UI 调用"""
+        try:
+            name = project_info.get("name", "新项目")
+            description = project_info.get("description", "")
+            author = project_info.get("author", "")
+            target_word_count = project_info.get("word_count", 80000)
+            proj_type = project_info.get("type", "novel")
+            location = project_info.get("location")
+            if not location:
+                raise ValueError("项目位置不能为空")
+            from src.domain.entities.project import ProjectType
+            type_enum = getattr(ProjectType, proj_type.upper(), ProjectType.NOVEL)
+
+            # 组合路径
+            project_dir = Path(location) / name
+
+            async def do_create():
+                project = await self.project_service.create_project(
+                    name=name,
+                    project_type=type_enum,
+                    description=description,
+                    author=author,
+                    target_word_count=target_word_count,
+                    project_path=str(project_dir)
+                )
+                if not project:
+                    raise RuntimeError("项目创建失败")
+                # 打开项目（统一委派 ProjectController 以避免重复实现与重复信号）
+                await self.project_controller.open_project_by_path(project_dir)
+                return project_dir
+
+            def on_success(path):
+                logger.info(f"项目创建异步任务成功，路径: {path}")
+                if completion_callback:
+                    logger.info("调用项目创建完成回调")
+                    completion_callback(path)
+                else:
+                    logger.warning("没有设置项目创建完成回调")
+
+            def on_error(e):
+                logger.error(f"项目创建异步任务失败: {e}")
+                self._show_error("创建项目失败", str(e))
+                if completion_callback:
+                    logger.info("调用项目创建失败回调")
+                    completion_callback(None)
+
+            self._run_async_task(
+                do_create(),
+                success_callback=lambda _: on_success(project_dir),
+                error_callback=on_error
+            )
+            return project_dir  # 立即返回预期路径
+        except Exception as e:
+            logger.error(f"创建项目失败: {e}")
+            if completion_callback:
+                completion_callback(None)
+            raise
 
 
     # ========================================================================
     # 搜索功能
     # ========================================================================
-    
+
     def _ensure_find_replace_dialog(self) -> None:
         """确保查找替换对话框已创建并连接信号"""
         if not self._find_replace_dialog:
@@ -1843,11 +1766,11 @@ class MainController(QObject):
     def show_replace_dialog(self) -> None:
         """显示替换对话框"""
         self._show_find_replace_dialog(tab_index=1)
-    
+
     # ========================================================================
     # 工具功能
     # ========================================================================
-    
+
     def show_word_count(self) -> None:
         """显示字数统计"""
         try:
@@ -1869,7 +1792,7 @@ class MainController(QObject):
         except Exception as e:
             logger.error(f"显示字数统计对话框失败: {e}")
             self._show_error("字数统计", f"无法显示字数统计: {e}")
-    
+
     def show_settings(self) -> None:
         """显示设置对话框"""
         try:
@@ -1892,7 +1815,7 @@ class MainController(QObject):
         except Exception as e:
             logger.error(f"显示设置对话框失败: {e}")
             self._show_error("设置对话框", f"无法显示设置对话框: {e}")
-    
+
     def show_about(self) -> None:
         """显示关于对话框"""
         QMessageBox.about(
@@ -1917,11 +1840,11 @@ class MainController(QObject):
             <p>© 2024 AI小说编辑器团队</p>
             """
         )
-    
+
     # ========================================================================
     # 事件处理
     # ========================================================================
-    
+
     def _on_window_closing(self) -> None:
         """窗口关闭处理"""
         try:
@@ -1929,35 +1852,35 @@ class MainController(QObject):
             QTimer.singleShot(0, lambda: self._run_async_save_before_exit())
         except Exception as e:
             logger.error(f"关闭前保存失败: {e}")
-    
+
     async def _save_before_exit(self) -> None:
         """退出前保存"""
         try:
             # 保存文档
             if self.document_service.has_open_documents:
                 await self.document_service.save_all_documents()
-            
+
             # 保存项目
             if self.project_service.has_current_project:
                 await self.project_service.save_current_project()
-            
+
             # 关闭应用服务
             self.app_service.shutdown()
-            
+
         except Exception as e:
             logger.error(f"退出前保存失败: {e}")
-    
+
     # ========================================================================
     # 辅助方法
     # ========================================================================
-    
+
     # 移除重复的_show_error方法定义，使用后面的线程安全版本
-    
+
     def _show_warning(self, title: str, message: str) -> None:
         """显示警告消息"""
         if self._main_window:
             QMessageBox.warning(self._main_window, title, message)
-    
+
     def _show_info(self, title: str, message: str) -> None:
         """显示信息消息"""
         if self._main_window:
@@ -2272,8 +2195,8 @@ class MainController(QObject):
             }
             project_type = type_map.get(project_info.get("type", "小说"), ProjectType.NOVEL)
 
-            # 使用同步方式创建项目，避免线程问题
-            self._create_project_sync(project_info, project_type)
+            # 统一走集中入口，避免多套实现造成不一致
+            self.create_project_via_service(project_info)
 
         except Exception as e:
             logger.error(f"处理项目向导完成失败: {e}")
@@ -2283,24 +2206,6 @@ class MainController(QObject):
 
 
 
-    def _create_project_sync(self, project_info: dict, project_type: ProjectType):
-        """非阻塞的项目创建"""
-        try:
-            # 显示状态消息
-            self.status_message.emit("正在创建项目...")
-
-            # 使用非阻塞的异步任务执行器
-            logger.info("准备启动异步项目创建任务")
-            self._run_async_task(
-                self._create_project_from_wizard_async(project_info, project_type),
-                success_callback=lambda project: self._on_project_creation_complete(project, project_info),
-                error_callback=lambda e: self._on_project_creation_error_simple(project_info, e)
-            )
-            logger.info("异步项目创建任务已启动")
-
-        except Exception as e:
-            logger.error(f"启动项目创建失败: {e}")
-            self._show_error("创建项目失败", str(e))
 
     def _on_project_creation_complete(self, project, project_info: dict):
         """项目创建完成回调"""
@@ -2313,7 +2218,7 @@ class MainController(QObject):
                 self.project_opened.emit(project)
                 logger.info(f"项目打开信号已发送: {project.title}")
 
-                self.status_message.emit(f"项目创建成功并已打开: {project.title}")
+                # 状态消息由 ProjectController 发送，避免重复
                 logger.info(f"新建项目已自动打开: {project.title} ({project.id})")
 
                 # 显示成功消息
@@ -2342,45 +2247,13 @@ class MainController(QObject):
 
 
 
-    async def _create_project_from_wizard_async(self, project_info: dict, project_type: ProjectType):
-        """从向导信息异步创建项目"""
-        try:
-            self.status_message.emit("正在创建项目...")
-
-            # 验证项目位置
-            project_location = project_info.get("location")
-            if not project_location:
-                raise ValueError("项目位置不能为空")
-
-            # 创建项目
-            project = await self.project_service.create_project(
-                name=project_info["name"],
-                project_type=project_type,
-                description=project_info.get("description", ""),
-                author=project_info.get("author", ""),
-                target_word_count=project_info.get("word_count", 80000),
-                project_path=project_location
-            )
-
-            if project:
-                # 根据模板创建初始文档
-                await self._create_template_documents(project, project_info.get("template", "空白项目"))
-
-                logger.info(f"项目创建完成: {project.title} -> {project.root_path}")
-                return project
-            else:
-                raise ValueError("项目创建返回空值")
-
-        except Exception as e:
-            logger.error(f"从向导异步创建项目失败: {e}")
-            raise  # 重新抛出异常，让调用者处理
 
     def _emit_project_opened_signal(self, project):
         """发送项目打开信号"""
         try:
             logger.info(f"🎯 发送项目打开信号: {project.title}")
             self.project_opened.emit(project)
-            self.status_message.emit(f"项目创建成功: {project.title}")
+            # 状态消息由 ProjectController 发送，避免重复
             logger.info(f"项目打开信号已发送: {project.title}")
 
         except Exception as e:
@@ -2487,9 +2360,9 @@ class MainController(QObject):
     # ========================================================================
 
     def _run_async_open_project(self, file_path: Path):
-        """运行异步打开项目操作"""
+        """运行异步打开项目操作（委派至项目控制器）"""
         self._run_async_task(
-            self._open_project_async(file_path),
+            self.project_controller.open_project_by_path(file_path),
             success_callback=lambda _: logger.info(f"项目打开成功: {file_path}"),
             error_callback=lambda e: self._show_error("打开项目失败", str(e))
         )
@@ -2581,21 +2454,6 @@ class MainController(QObject):
             # 备用方案
             project_tree_widget.load_project(project, [])
 
-    def _run_async_import_project(self, file_path: Path):
-        """运行异步导入项目操作"""
-        self._run_async_task(
-            self._import_project_async(file_path),
-            success_callback=lambda _: logger.info(f"项目导入成功: {file_path}"),
-            error_callback=lambda e: self._show_error("导入项目失败", str(e))
-        )
-
-    def _run_async_export_project(self, file_path: Path):
-        """运行异步导出项目操作"""
-        self._run_async_task(
-            self._export_project_async(file_path),
-            success_callback=lambda _: logger.info(f"项目导出成功: {file_path}"),
-            error_callback=lambda e: self._show_error("导出项目失败", str(e))
-        )
 
     def _run_async_open_document(self, document_id: str):
         """运行异步打开文档操作"""
@@ -2613,8 +2471,9 @@ class MainController(QObject):
                 # 清理打开状态
                 self._opening_documents.discard(document_id)
 
+        # 委派至文档控制器
         self._run_async_task(
-            self._open_document_async(document_id),
+            self.document_controller.open_document(document_id),
             success_callback=success_callback,
             error_callback=error_callback
         )
@@ -2838,37 +2697,8 @@ class MainController(QObject):
 
 
 
-    def _run_async_open_project(self, file_path: Path):
-        """运行异步打开项目操作"""
-        self._run_async_task(
-            self._open_project_async(file_path),
-            success_callback=lambda _: logger.info(f"项目打开成功: {file_path}"),
-            error_callback=lambda e: self._show_error("打开项目失败", str(e))
-        )
 
-    def _run_async_open_project_dir(self, project_dir: Path):
-        """运行异步打开项目目录操作"""
-        self._run_async_task(
-            self._open_project_dir_async(project_dir),
-            success_callback=lambda _: logger.info(f"项目目录打开成功: {project_dir}"),
-            error_callback=lambda e: self._show_error("打开项目目录失败", str(e))
-        )
 
-    def _run_async_import_project(self, file_path: Path):
-        """运行异步导入项目操作"""
-        self._run_async_task(
-            self._import_project_async(file_path),
-            success_callback=lambda _: logger.info(f"项目导入成功: {file_path}"),
-            error_callback=lambda e: self._show_error("导入项目失败", str(e))
-        )
-
-    def _run_async_export_project(self, file_path: Path):
-        """运行异步导出项目操作"""
-        self._run_async_task(
-            self._export_project_async(file_path),
-            success_callback=lambda _: logger.info(f"项目导出成功: {file_path}"),
-            error_callback=lambda e: self._show_error("导出项目失败", str(e))
-        )
 
     def _run_async_save_before_exit(self):
         """运行异步退出前保存操作"""
@@ -2927,41 +2757,153 @@ class MainController(QObject):
     # ========================================================================
 
     def _on_document_created(self, event: DocumentCreatedEvent) -> None:
-        """处理文档创建事件"""
+        """处理文档创建事件
+        兼容两种来源：
+        - 事件总线发送的 DocumentCreatedEvent
+        - DocumentController.document_created 信号发送的 Document 实体
+        """
         try:
-            logger.info(f"🎯 收到文档创建事件: {event.document_title} ({event.document_type.value}) - 文档ID: {event.document_id}")
+            from src.domain.events.document_events import DocumentCreatedEvent as DCEvent
+            # 归一化为 DocumentCreatedEvent
+            if hasattr(event, 'document_title') and hasattr(event, 'document_id'):
+                normalized = event
+            else:
+                # 认为是 Document 实体或 dict
+                title = getattr(event, 'title', None)
+                if title is None and isinstance(event, dict):
+                    title = event.get('title')
+                doc_id = getattr(event, 'document_id', None) or getattr(event, 'id', None)
+                doc_type = getattr(event, 'document_type', None) or getattr(event, 'type', None)
+                # 规范化类型
+                from src.domain.entities.document import DocumentType
+                if isinstance(doc_type, str):
+                    try:
+                        type_enum = DocumentType[doc_type.upper()]
+                    except Exception:
+                        try:
+                            type_enum = DocumentType(doc_type)
+                        except Exception:
+                            type_enum = DocumentType.CHAPTER
+                elif isinstance(doc_type, DocumentType):
+                    type_enum = doc_type
+                else:
+                    type_enum = DocumentType.CHAPTER
+                # 项目ID尽量从当前项目读取
+                project_id = getattr(event, 'project_id', None)
+                if project_id is None and hasattr(self, 'project_service') and getattr(self.project_service, 'has_current_project', False):
+                    project_id = self.project_service.current_project.id
+                normalized = DCEvent(
+                    document_id=str(doc_id or ""),
+                    document_title=str(title or ""),
+                    document_type=type_enum,
+                    project_id=project_id
+                )
+
+            logger.info(f"🎯 收到文档创建事件: {normalized.document_title} ({normalized.document_type.value}) - 文档ID: {normalized.document_id}")
 
             # 检查是否是重复事件
             if hasattr(self, '_processed_document_events'):
-                if event.document_id in self._processed_document_events:
-                    logger.warning(f"⚠️ 重复的文档创建事件，跳过处理: {event.document_title} ({event.document_id})")
+                if normalized.document_id in self._processed_document_events:
+                    logger.warning(f"⚠️ 重复的文档创建事件，跳过处理: {normalized.document_title} ({normalized.document_id})")
                     return
-                self._processed_document_events.add(event.document_id)
+                self._processed_document_events.add(normalized.document_id)
             else:
-                self._processed_document_events = {event.document_id}
+                self._processed_document_events = {normalized.document_id}
 
             # 立即刷新项目树以显示新文档
-            self._refresh_project_tree_for_new_document(event)
+            self._refresh_project_tree_for_new_document(normalized)
 
             # 清除文档列表缓存
             self._clear_document_cache()
 
-            logger.info(f"✅ 文档创建事件处理完成: {event.document_title}")
+            logger.info(f"✅ 文档创建事件处理完成: {normalized.document_title}")
 
         except Exception as e:
             logger.error(f"❌ 处理文档创建事件失败: {e}")
             import traceback
             logger.error(traceback.format_exc())
 
-    def _on_document_saved(self, event: DocumentSavedEvent) -> None:
-        """处理文档保存事件"""
+    def _on_document_saved(self, event: DocumentSavedEvent | str) -> None:
+        """处理文档保存事件（兼容旧签名）"""
         try:
-            logger.debug(f"📝 收到文档保存事件: {event.document_title}")
-
-            # 可以在这里添加保存后的处理逻辑
-            # 比如更新项目树中的文档统计信息
-
+            if isinstance(event, str):
+                logger.debug(f"📝 收到文档保存事件: {event}")
+            else:
+                logger.debug(f"📝 收到文档保存事件: {event.document_title}")
         except Exception as e:
+            logger.error(f"❌ 处理文档保存事件失败: {e}")
+
+    def _on_document_closed(self, document_id: str) -> None:
+        try:
+            logger.info(f"📕 文档已关闭: {document_id}")
+        except Exception:
+            pass
+
+    def _on_document_deleted(self, document_id: str) -> None:
+        try:
+            logger.info(f"🗑️ 文档已删除: {document_id}")
+            # 刷新项目树
+            self.schedule_refresh_project_tree()
+            # 若编辑器可用，关闭对应标签
+            if hasattr(self, '_main_window') and self._main_window and hasattr(self._main_window, 'editor_widget'):
+                editor = self._main_window.editor_widget
+                if hasattr(editor, 'close_document'):
+                    editor.close_document(document_id)
+        except Exception as e:
+            logger.warning(f"处理文档删除信号时出现问题: {e}")
+
+    def _on_document_opened_event(self, event):
+        """从 DocumentController 接收 DocumentOpenedEvent，桥接到 UI 仍用文档对象"""
+        try:
+            # 从服务获取文档对象
+            doc_id = getattr(event, 'document_id', None) or getattr(event, 'id', None)
+            document = None
+            if doc_id:
+                try:
+                    # 在主线程调度 UI 更新
+                    self._run_async_task(
+                        self.document_service.open_document(doc_id),
+                        success_callback=lambda doc: self._on_document_opened_success(doc, doc_id)
+                    )
+                    return
+                except Exception:
+                    document = None
+            # 若无法获取，直接转发事件对象
+            self.document_opened.emit(event)
+        except Exception as e:
+            logger.error(f"处理 DocumentOpenedEvent 失败: {e}")
+
+    def _on_document_closed_event(self, event):
+        try:
+            doc_id = getattr(event, 'document_id', None) or getattr(event, 'id', None)
+            if doc_id:
+                self._on_document_closed(doc_id)
+            else:
+                logger.debug("DocumentClosedEvent 缺少 document_id")
+        except Exception as e:
+            logger.error(f"处理 DocumentClosedEvent 失败: {e}")
+
+    def _on_document_deleted_event(self, event):
+        try:
+            doc_id = getattr(event, 'document_id', None) or getattr(event, 'id', None)
+            if doc_id:
+                self._on_document_deleted(doc_id)
+            else:
+                logger.debug("DocumentDeletedEvent 缺少 document_id")
+        except Exception as e:
+            logger.error(f"处理 DocumentDeletedEvent 失败: {e}")
+
+    def _on_document_renamed_event(self, event):
+        try:
+            doc_id = getattr(event, 'document_id', None) or getattr(event, 'id', None)
+            new_title = getattr(event, 'new_title', None)
+            if doc_id and new_title is not None:
+                self._on_document_renamed(doc_id, new_title)
+            else:
+                logger.debug("DocumentTitleChangedEvent 缺少字段")
+        except Exception as e:
+            logger.error(f"处理 DocumentTitleChangedEvent 失败: {e}")
+
             logger.error(f"❌ 处理文档保存事件失败: {e}")
 
     def _refresh_project_tree_for_new_document(self, event: DocumentCreatedEvent) -> None:
@@ -2979,13 +2921,78 @@ class MainController(QObject):
                 logger.info(f"🔄 刷新项目树以显示新文档: {event.document_title}")
 
                 # 使用延迟刷新，确保文档已完全保存
-                QTimer.singleShot(100, self._immediate_refresh_project_tree)
+                self.schedule_refresh_project_tree(100)
 
             else:
                 logger.debug(f"文档不属于当前项目，跳过刷新: {event.project_id}")
 
         except Exception as e:
             logger.error(f"❌ 为新文档刷新项目树失败: {e}")
+
+    def schedule_refresh_project_tree(self, delay_ms: int = 200) -> None:
+        """统一的项目树刷新调度入口（带节流，确保在主线程）"""
+        try:
+            # 若不在主线程，转到主线程后再调度
+            try:
+                from src.shared.utils.thread_safety import is_main_thread
+                if not is_main_thread():
+                    from src.shared.utils.async_manager import get_async_manager
+                    get_async_manager().callback_signal.emit(lambda: self.schedule_refresh_project_tree(delay_ms))
+                    return
+            except Exception:
+                pass
+
+            # 如果已有定时器在运行，取消它
+            if self._refresh_timer and self._refresh_timer.isActive():
+                self._refresh_timer.stop()
+
+            # 标记有待刷新
+            self._pending_refresh = True
+
+            # 创建新的定时器（绑定到主控制器线程）
+            if not self._refresh_timer:
+                self._refresh_timer = QTimer(self)
+                self._refresh_timer.setSingleShot(True)
+                self._refresh_timer.timeout.connect(self._execute_pending_refresh)
+
+            # 启动定时器
+            self._refresh_timer.start(delay_ms)
+            logger.debug(f"项目树刷新已调度，延迟 {delay_ms}ms")
+
+        except Exception as e:
+            logger.error(f"调度项目树刷新失败: {e}")
+            # 备用方案：立即刷新
+            self._immediate_refresh_project_tree()
+
+    def _execute_pending_refresh(self) -> None:
+        """执行待处理的项目树刷新"""
+        try:
+            if self._pending_refresh:
+                self._pending_refresh = False
+                self._immediate_refresh_project_tree()
+                logger.debug("执行了节流的项目树刷新")
+        except Exception as e:
+            logger.error(f"执行项目树刷新失败: {e}")
+
+    def refresh_project_tree(self) -> None:
+        """供外部触发的项目树刷新入口（MainWindow回调使用）"""
+        try:
+            self._immediate_refresh_project_tree()
+        except Exception as e:
+            logger.error(f"刷新项目树失败: {e}")
+    def _on_document_renamed(self, document_id: str, new_title: str) -> None:
+        try:
+            logger.info(f"✏️ 文档重命名事件: {document_id} -> {new_title}")
+            # 刷新项目树
+            self.schedule_refresh_project_tree()
+            # 更新编辑器页签标题
+            if hasattr(self, '_main_window') and self._main_window and hasattr(self._main_window, 'editor_widget'):
+                editor = self._main_window.editor_widget
+                if hasattr(editor, 'rename_document_tab'):
+                    editor.rename_document_tab(document_id, new_title)
+        except Exception as e:
+            logger.warning(f"处理文档重命名信号时出现问题: {e}")
+
 
     def _immediate_refresh_project_tree(self) -> None:
         """立即刷新项目树"""

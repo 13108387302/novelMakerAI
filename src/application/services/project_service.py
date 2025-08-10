@@ -16,6 +16,8 @@ from src.domain.events.project_events import (
 )
 from src.shared.events.event_bus import EventBus
 from src.shared.utils.logger import get_logger
+from src.shared.utils.base_service import BaseService, service_operation
+from src.shared.utils.event_publisher import EventPublisher
 from src.shared.constants import (
     DEFAULT_TARGET_WORD_COUNT, DEFAULT_RECENT_PROJECTS_LIMIT
 )
@@ -27,23 +29,22 @@ PROJECT_SUBDIRS = ["documents", "backups", "exports", "cache"]
 DEFAULT_EXPORT_FORMAT = "json"
 
 
-class ProjectService:
+class ProjectService(BaseService):
     """
-    项目服务
+    项目服务 - 重构版本
 
     管理小说项目的完整生命周期，包括创建、打开、保存、关闭和删除操作。
     提供项目状态管理和事件发布功能，支持不同类型的项目。
 
-    实现方式：
-    - 使用仓储模式进行项目数据持久化
-    - 通过事件总线发布项目状态变更事件
-    - 维护当前活动项目的引用
-    - 提供项目元数据管理功能
-    - 支持异步操作确保UI响应性
+    重构改进：
+    - 继承BaseService提供统一的错误处理
+    - 使用EventPublisher统一事件发布逻辑
+    - 减少重复的异常处理代码
+    - 提高代码可维护性
 
     Attributes:
         project_repository: 项目仓储接口
-        event_bus: 事件总线用于发布项目事件
+        event_publisher: 事件发布器
         _current_project: 当前打开的项目实例
     """
 
@@ -59,8 +60,9 @@ class ProjectService:
             project_repository: 项目仓储接口实现
             event_bus: 事件总线用于发布项目相关事件
         """
+        super().__init__("ProjectService")
         self.project_repository = project_repository
-        self.event_bus = event_bus
+        self.event_publisher = EventPublisher(event_bus)
         self._current_project: Optional[Project] = None
     
     async def create_project(
@@ -151,10 +153,7 @@ class ProjectService:
                     project_path=str(saved_project.root_path) if saved_project.root_path else None
                 )
                 # 使用统一的事件发布方法
-                try:
-                    await self.event_bus.publish_async(event)
-                except Exception as e:
-                    logger.warning(f"发布项目创建事件失败: {e}")
+                await self.event_publisher.publish_safe(event, "项目创建")
 
                 logger.info(f"项目创建成功: {name} ({saved_project.id})")
                 return saved_project
@@ -183,15 +182,12 @@ class ProjectService:
                 self._current_project = project
 
                 # 发布项目打开事件
-                try:
-                    event = ProjectOpenedEvent(
-                        project_id=project.id,
-                        project_name=project.title,
-                        project_path=str(project.root_path) if project.root_path else ""
-                    )
-                    await self.event_bus.publish_async(event)
-                except Exception as e:
-                    logger.warning(f"发布项目打开事件失败: {e}")
+                event = ProjectOpenedEvent(
+                    project_id=project.id,
+                    project_name=project.title,
+                    project_path=str(project.root_path) if project.root_path else ""
+                )
+                await self.event_publisher.publish_safe(event, "项目打开")
 
                 logger.info(f"项目打开成功: {project.title} ({project.id}) -> {project.root_path}")
                 return project
@@ -242,10 +238,7 @@ class ProjectService:
                     project_id=self._current_project.id,
                     project_name=self._current_project.title
                 )
-                try:
-                    await self.event_bus.publish_async(event)
-                except Exception as e:
-                    logger.warning(f"发布项目关闭事件失败: {e}")
+                await self.event_publisher.publish_safe(event, "项目关闭")
                 
                 logger.info(f"项目关闭: {self._current_project.title}")
                 self._current_project = None
@@ -270,10 +263,7 @@ class ProjectService:
                         project_name=self._current_project.title,
                         save_path=str(self._current_project.root_path) if self._current_project.root_path else ""
                     )
-                    try:
-                        await self.event_bus.publish_async(event)
-                    except Exception as e:
-                        logger.warning(f"发布项目保存事件失败: {e}")
+                    await self.event_publisher.publish_safe(event, "项目保存")
                     
                     logger.info(f"项目保存成功: {self._current_project.title}")
                     return True
@@ -473,15 +463,13 @@ class ProjectService:
                 logger.info(f"项目另存为成功: {project.title} -> {file_path}")
 
                 # 发布项目保存事件
-                try:
-                    event = ProjectSavedEvent(
-                        project_id=project.id,
-                        project_name=project.title,
-                        save_path=str(file_path)
-                    )
-                    await self.event_bus.publish_async(event)
-                except Exception as e:
-                    logger.warning(f"发布项目保存事件失败: {e}")
+                # 发布项目保存事件
+                event = ProjectSavedEvent(
+                    project_id=project.id,
+                    project_name=project.title,
+                    save_path=str(file_path)
+                )
+                await self.event_publisher.publish_safe(event, "项目保存")
                 return True
             else:
                 logger.error(f"项目另存为失败: {project.title}")

@@ -22,8 +22,8 @@
 - 模块化设计便于维护和扩展
 
 使用示例：
-    from config.settings import get_settings
-    settings = get_settings()
+    from config.settings import get_settings_for_project
+    settings = get_settings_for_project(project_root)
     print(settings.app_name)
 """
 
@@ -41,8 +41,8 @@ try:
         LoggingSettings,
         PluginSettings,
         SecuritySettings,
-        get_settings,
-        reset_settings
+        get_settings_for_project,
+        db_url_for_project
     )
 
     __all__ = [
@@ -53,8 +53,8 @@ try:
         "LoggingSettings",
         "PluginSettings",
         "SecuritySettings",
-        "get_settings",
-        "reset_settings",
+        "get_settings_for_project",
+        "db_url_for_project",
         "__version__",
         "__author__"
     ]

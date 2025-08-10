@@ -6,7 +6,6 @@ JSON格式处理器
 处理JSON格式的项目和文档导入导出
 """
 
-import json
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 from datetime import datetime
@@ -117,9 +116,11 @@ class JsonFormatHandler(BaseFormatHandler):
                     logger.warning(f"获取角色信息失败: {e}")
                     project_data["characters"] = []
 
-            # 写入JSON文件
-            with open(output_path, 'w', encoding=options.output_encoding) as f:
-                json.dump(project_data, f, ensure_ascii=False, indent=2)
+            # 写入JSON文件（统一原子写入）
+            from src.shared.utils.file_operations import get_file_operations
+            await get_file_operations("import_export").save_json_atomic(
+                output_path, project_data, create_backup=True
+            )
 
             logger.info(f"项目已导出为JSON: {output_path}")
             return True
@@ -136,9 +137,13 @@ class JsonFormatHandler(BaseFormatHandler):
                 logger.error(f"不支持的文件格式: {input_path.suffix}")
                 return None
 
-            # 读取JSON文件
-            with open(input_path, 'r', encoding=options.import_encoding) as f:
-                data = json.load(f)
+            # 读取JSON文件（统一读取+缓存）
+            from src.shared.utils.file_operations import get_file_operations
+            data = await get_file_operations("import_export").load_json_cached(
+                input_path
+            )
+            if data is None:
+                return None
 
             # 验证JSON结构
             if not self._validate_json_structure(data):
@@ -202,9 +207,11 @@ class JsonFormatHandler(BaseFormatHandler):
             if hasattr(document, 'metadata') and document.metadata:
                 doc_data["document"]["metadata"] = document.metadata
 
-            # 写入JSON文件
-            with open(output_path, 'w', encoding=options.output_encoding) as f:
-                json.dump(doc_data, f, ensure_ascii=False, indent=2)
+            # 写入JSON文件（统一原子写入）
+            from src.shared.utils.file_operations import get_file_operations
+            await get_file_operations("import_export").save_json_atomic(
+                output_path, doc_data, create_backup=True
+            )
 
             logger.info(f"文档已导出为JSON: {output_path}")
             return True
@@ -221,9 +228,13 @@ class JsonFormatHandler(BaseFormatHandler):
                 logger.error(f"不支持的文件格式: {input_path.suffix}")
                 return None
 
-            # 读取JSON文件
-            with open(input_path, 'r', encoding=options.import_encoding) as f:
-                data = json.load(f)
+            # 读取JSON文件（统一读取+缓存）
+            from src.shared.utils.file_operations import get_file_operations
+            data = await get_file_operations("import_export").load_json_cached(
+                input_path
+            )
+            if data is None:
+                return None
 
             # 提取文档信息
             doc_data = data.get("document", {})

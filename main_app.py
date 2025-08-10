@@ -9,7 +9,7 @@ AI小说编辑器 2.0 - 主应用程序
 import sys
 import asyncio
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Any
 
 # 添加项目根目录到Python路径
 PROJECT_ROOT = Path(__file__).parent
@@ -60,14 +60,13 @@ from src.application.services.search import SearchService
 from src.application.services.import_export_service import ImportExportService
 from src.application.services.status_service import StatusService
 
-# 导入配置
-from config.settings import Settings
+# 配置现在在需要时局部导入
 
 # 导入线程安全工具
 from src.shared.utils.thread_safety import is_main_thread
 from src.shared.utils.error_handler import handle_errors
 from src.shared.constants import (
-    UI_MEDIUM_DELAY, UI_LONG_DELAY, ASYNC_MEDIUM_TIMEOUT,
+    ASYNC_MEDIUM_TIMEOUT,
     APP_NAME, APP_VERSION, APP_ORGANIZATION
 )
 from src.shared.utils.service_registry import ServiceRegistryFactory
@@ -120,7 +119,7 @@ class AINovelEditorApp:
         self.theme_manager: Optional[ThemeManager] = None
         self.main_window: Optional[MainWindow] = None
         self.main_controller: Optional[MainController] = None
-        self.settings: Optional[Settings] = None
+        self.settings: Optional[Any] = None
 
         # 服务引用
         self.app_service: Optional[ApplicationService] = None
@@ -194,7 +193,9 @@ class AINovelEditorApp:
             return True
 
         except Exception as e:
+            import traceback
             logger.error(f"❌ 应用程序初始化失败: {e}")
+            traceback.print_exc()  # 打印详细错误追踪
             self._show_error("初始化失败", f"应用程序初始化失败：{e}")
             return False
 
@@ -220,12 +221,20 @@ class AINovelEditorApp:
         Note:
             核心组件初始化失败会导致整个应用程序无法启动
         """
-        # 创建设置（使用默认配置）
-        from config.settings import get_settings
-        self.settings = get_settings()
+        # 设置和项目上下文将在项目打开后初始化
+        self.settings = None
+        self.project_paths = None
 
         # 创建依赖注入容器
         self.container = Container()
+
+        # 如果稍后有项目上下文，注册 ProjectPaths 到容器以影响 ServiceRegistry 的 data_dir
+        try:
+            from src.shared.project_context import ProjectPaths
+            # 暂不注册，待“打开项目”后再注册具体实例
+            pass
+        except Exception:
+            pass
 
         # 设置全局容器实例
         from src.shared.ioc.container import set_global_container
@@ -279,6 +288,7 @@ class AINovelEditorApp:
 
     def _register_core_singletons(self) -> None:
         """注册核心单例组件"""
+        from config.settings import Settings
         self.container.register_singleton(Settings, lambda: self.settings)
         self.container.register_singleton(EventBus, lambda: self.event_bus)
         self.container.register_singleton(ThemeManager, lambda: self.theme_manager)
@@ -318,7 +328,8 @@ class AINovelEditorApp:
             return False
 
         return True
-    
+
+
     @handle_errors("用户界面创建", show_dialog=False)
     def _create_ui(self) -> bool:
         """创建用户界面"""
@@ -332,8 +343,9 @@ class AINovelEditorApp:
         # 注册插件管理器到容器
         self.container.register_singleton(PluginManager, lambda: self.plugin_manager)
 
-        # 获取主控制器
-        self.main_controller = self.container.get(MainController)
+        # 获取主控制器（如果还没有创建的话）
+        if not self.main_controller:
+            self.main_controller = self.container.get(MainController)
 
         # 初始化AI组件工厂
         try:
@@ -419,21 +431,25 @@ class AINovelEditorApp:
     def _apply_theme(self):
         """应用主题"""
         try:
-            # 从设置中获取主题
-            theme_name = self.settings.ui.theme
-            
+            # 从设置中获取主题（如果设置可用）
+            if self.settings:
+                theme_name = self.settings.ui.theme
+            else:
+                # 使用默认主题
+                theme_name = "light"
+
             if theme_name == "dark":
                 theme_type = ThemeType.DARK
             elif theme_name == "auto":
                 theme_type = ThemeType.AUTO
             else:
                 theme_type = ThemeType.LIGHT
-            
+
             # 应用主题
             self.theme_manager.set_theme(theme_type)
-            
+
             logger.info(f"主题应用完成: {theme_name}")
-            
+
         except Exception as e:
             logger.error(f"应用主题失败: {e}")
     
@@ -489,8 +505,8 @@ class AINovelEditorApp:
                     return
 
                 try:
-                    providers_config = ai_orchestration.providers_config
-                    logger.info(f"🔧 提供商配置: {list(providers_config.keys())}")
+                    # AI编排服务现在委托给统一客户端管理器
+                    logger.info(f"🔧 AI编排服务已重构，使用统一客户端管理器")
                 except Exception as e:
                     logger.error(f"❌ 获取提供商配置失败: {e}")
                     return
@@ -581,14 +597,30 @@ class AINovelEditorApp:
             if not self.initialize():
                 return 1
 
+            # 显示启动页面选择项目
+            project_path = self._show_startup_page()
+            if not project_path:
+                logger.info("用户取消选择项目，退出应用程序")
+                return 0
+
+            # 初始化项目上下文
+            if not self._initialize_project_context(project_path):
+                return 1
+
+            # 注册依赖（现在有了项目上下文）
+            if not self._register_dependencies():
+                return 1
+
+            # 创建用户界面
+            if not self._create_ui():
+                return 1
+
+            # 打开选择的项目
+            if not self._open_selected_project(project_path):
+                logger.warning("项目打开失败，但继续显示主界面")
+
             # 显示主窗口
             self.main_window.show()
-
-            # 显示欢迎消息
-            self._show_welcome_message()
-
-            # 自动打开上次项目
-            self._auto_open_last_project()
 
             # 使用标准Qt事件循环
             return self.app.exec()
@@ -600,97 +632,203 @@ class AINovelEditorApp:
         finally:
             self._cleanup()
 
-    def _auto_open_last_project(self):
-        """自动打开上次项目"""
+    def _show_startup_page(self) -> Optional[Path]:
+        """显示启动页面选择项目"""
         try:
-            if not hasattr(self, 'main_controller') or not self.main_controller:
-                logger.warning("主控制器未初始化，无法自动打开上次项目")
-                return
+            from PyQt6.QtWidgets import QDialog
+            from src.presentation.views.startup_window import StartupWindow
+            from src.shared.managers.recent_projects_manager import get_recent_projects_manager
 
-            if not hasattr(self.main_controller, 'auto_open_last_project'):
-                logger.warning("主控制器缺少auto_open_last_project方法")
-                return
+            # 获取最近项目管理器
+            recent_manager = get_recent_projects_manager()
+            recent_projects = recent_manager.get_recent_projects()
 
-            # 延迟调用，确保界面完全加载
-            QTimer.singleShot(UI_MEDIUM_DELAY, self.main_controller.auto_open_last_project)
-        except Exception as e:
-            logger.error(f"自动打开上次项目失败: {e}")
-
-    def _show_welcome_message(self):
-        """显示欢迎消息"""
-        try:
-            # 检查用户偏好设置
-            from src.shared.config.user_preferences import get_user_preferences
-            user_prefs = get_user_preferences()
-
-            # 如果用户选择不再显示，则跳过
-            if not user_prefs.should_show_welcome_dialog():
-                logger.debug("用户选择不再显示欢迎对话框，跳过显示")
-                return
-
-            # 延迟显示欢迎对话框
-            QTimer.singleShot(UI_LONG_DELAY * 2, self._display_welcome_dialog)
-
-        except Exception as e:
-            logger.error(f"显示欢迎消息失败: {e}")
-
-    def _display_welcome_dialog(self):
-        """显示欢迎对话框"""
-        try:
-            from src.presentation.dialogs.welcome_dialog import WelcomeDialog
-            from src.shared.config.user_preferences import get_user_preferences
-
-            user_prefs = get_user_preferences()
-
-            # 创建欢迎对话框
-            welcome_dialog = WelcomeDialog(self.main_window)
+            # 创建启动页面（无论是否有最近项目都显示）
+            startup_window = StartupWindow(recent_projects)
 
             # 连接信号
-            welcome_dialog.dont_show_again_changed.connect(
-                lambda dont_show: user_prefs.set_show_welcome_dialog(not dont_show)
-            )
+            startup_window.remove_requested.connect(recent_manager.remove_project)
 
-            # 显示对话框
-            welcome_dialog.exec()
+            # 项目创建逻辑：统一委托主控制器与服务层，避免重复实现
+            def on_create_project(info: dict):
+                try:
+                    logger.info(f"收到项目创建请求: {info.get('name', '未知')}")
 
-            logger.debug("欢迎对话框显示完成")
+                    def completion_callback(path):
+                        try:
+                            if path:
+                                startup_window.selected_project_path = str(path)
+                                startup_window.accept()
+                            else:
+                                from PyQt6.QtWidgets import QMessageBox
+                                QMessageBox.warning(
+                                    startup_window,
+                                    "创建项目失败",
+                                    "项目创建失败"
+                                )
+                        except Exception as e:
+                            logger.error(f"处理项目创建回调失败: {e}")
+
+                    # 统一入口：优先通过主控制器 -> ProjectService -> Repository
+                    if not self.main_controller:
+                        # 在主控制器尚未初始化时，仍然使用项目服务层完成创建，保持与编辑器一致的实现路径
+                        try:
+                            from src.shared.utils.service_registry import ServiceRegistryFactory
+                            from src.infrastructure.repositories.file_project_repository import FileProjectRepository
+                            from src.application.services.project_service import ProjectService
+                            reg = ServiceRegistryFactory(self.container, self.settings, self.event_bus)
+                            repo = FileProjectRepository(reg.data_dir / "projects")
+                            svc = ProjectService(repo, self.event_bus)
+
+                            # 与编辑器一致：在选定目录(location)下创建“给定名称”的子目录
+                            location = info.get('location') or info.get('path') or info.get('directory') or info.get('dir')
+                            name = (info.get('name') or '新项目').strip() or '新项目'
+                            if not location:
+                                from pathlib import Path
+                                base = Path.home() / 'Documents' / 'AI_Novel_Editor' / 'Projects'
+                                location = str(base)
+                            from pathlib import Path
+                            target_path = Path(location) / name
+
+                            # 调用异步服务在独立线程中执行，避免事件循环冲突
+                            import asyncio, threading
+                            result = {}
+                            def runner():
+                                try:
+                                    proj = asyncio.run(svc.create_project(name=name, project_path=str(target_path)))
+                                    result['proj'] = proj
+                                except Exception as e:
+                                    result['error'] = e
+                            t = threading.Thread(target=runner, daemon=True)
+                            t.start(); t.join()
+                            if 'error' in result:
+                                raise result['error']
+                            proj = result.get('proj')
+                            # 回调通知成功并关闭启动窗口
+                            project_root = getattr(proj, 'root_path', None) or target_path
+                            completion_callback(project_root)
+                        except Exception as ce:
+                            logger.error(f"项目服务层创建失败: {ce}")
+                            raise
+                    else:
+                        self.main_controller.create_project_via_service(info, completion_callback=completion_callback)
+
+                except Exception as e:
+                    logger.error(f"创建项目失败: {e}")
+                    from PyQt6.QtWidgets import QMessageBox
+                    QMessageBox.warning(
+                        startup_window,
+                        "创建项目失败",
+                        f"无法创建项目：\n{e}"
+                    )
+
+            startup_window.create_new_project.connect(on_create_project)
+
+            # 显示启动页面
+            result = startup_window.exec()
+
+            if result == QDialog.DialogCode.Accepted and startup_window.selected_project_path:
+                selected_path = Path(startup_window.selected_project_path)
+                return selected_path
+
+            return None
 
         except Exception as e:
-            logger.error(f"显示欢迎对话框失败: {e}")
-            # 如果自定义对话框失败，回退到简单消息框
-            self._show_fallback_welcome_message()
+            logger.error(f"显示启动页面失败: {e}")
+            # 回退到简单的文件夹选择对话框
+            return self._fallback_folder_selection()
 
-    def _show_fallback_welcome_message(self):
-        """显示回退的欢迎消息（简单消息框）"""
+    # 项目创建逻辑已移到启动页面中处理
+
+    def _fallback_folder_selection(self) -> Optional[Path]:
+        """回退的文件夹选择对话框"""
         try:
-            QMessageBox.information(
-                self.main_window,
-                "🎉 欢迎使用AI小说编辑器 2.0",
-                """
-                <h3>欢迎使用AI小说编辑器 2.0！</h3>
+            from PyQt6.QtWidgets import QFileDialog, QMessageBox
 
-                <p><b>🏗️ 全新架构特性：</b></p>
-                <ul>
-                <li>🔧 现代化分层架构设计</li>
-                <li>💉 依赖注入容器管理</li>
-                <li>📡 事件驱动通信机制</li>
-                <li>🗄️ 仓储模式数据访问</li>
-                <li>🎨 响应式主题系统</li>
-                <li>🤖 多AI服务集成</li>
-                </ul>
-
-                <p><b>🚀 开始创作：</b></p>
-                <p>• 点击"文件 → 新建项目"创建项目</p>
-                <p>• 使用右侧AI助手提升创作效率</p>
-                <p>• 体验全新的写作体验！</p>
-
-                <p style="color: #666; font-size: 10pt;">
-                版本 2.0.0 | 基于现代化架构重构
-                </p>
-                """
+            reply = QMessageBox.question(
+                None,
+                "选择项目文件夹",
+                "AI小说编辑器需要一个项目文件夹来存储所有数据。\n\n"
+                "请选择一个现有的项目文件夹，或选择一个空文件夹来创建新项目。",
+                QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Ok
             )
+
+            if reply != QMessageBox.StandardButton.Ok:
+                return None
+
+            folder_path = QFileDialog.getExistingDirectory(
+                None,
+                "选择项目文件夹",
+                str(Path.cwd()),
+                QFileDialog.Option.ShowDirsOnly
+            )
+
+            if folder_path:
+                return Path(folder_path)
+            return None
+
         except Exception as e:
-            logger.error(f"显示回退欢迎消息失败: {e}")
+            logger.error(f"回退文件夹选择失败: {e}")
+            return None
+
+    def _initialize_project_context(self, project_path: Path) -> bool:
+        """初始化项目上下文"""
+        try:
+            from src.shared.project_context import ProjectPaths, ensure_project_dirs
+            from config.settings import get_settings_for_project, Settings
+            from src.shared.managers.recent_projects_manager import get_recent_projects_manager
+
+            # 创建项目路径对象
+            self.project_paths = ProjectPaths(project_path)
+
+            # 确保项目目录结构存在
+            ensure_project_dirs(self.project_paths)
+
+            # 加载项目设置
+            self.settings = get_settings_for_project(project_path)
+
+            # 注册项目上下文到容器
+            self.container.register_instance(ProjectPaths, self.project_paths)
+            self.container.register_instance(Settings, self.settings)
+
+            # 更新最近项目的访问时间
+            recent_manager = get_recent_projects_manager()
+            recent_manager.update_project_access_time(str(project_path))
+
+            logger.info(f"项目上下文初始化完成: {project_path}")
+            return True
+
+        except Exception as e:
+            logger.error(f"初始化项目上下文失败: {e}")
+            return False
+
+    def _open_selected_project(self, project_path: Path) -> bool:
+        """打开选择的项目（统一入口到主控制器）"""
+        try:
+            if not self.main_controller:
+                logger.error("主控制器不可用")
+                return False
+
+            from PyQt6.QtCore import QTimer
+
+            def delayed():
+                try:
+                    logger.info(f"通过主控制器打开项目: {project_path}")
+                    self.main_controller.open_project_directory(project_path)  # 统一入口
+                except Exception as e:
+                    logger.error(f"通过主控制器打开项目失败: {e}")
+
+            # 延迟 500ms，确保主窗口加载完毕
+            QTimer.singleShot(500, delayed)
+            return True
+        except Exception as e:
+            logger.error(f"打开选择的项目失败: {e}")
+            return False
+
+
+
+    # 欢迎消息相关方法已移除，现在直接进入项目选择流程
     
     def _show_error(self, title: str, message: str):
         """显示错误消息"""
@@ -750,13 +888,19 @@ class AINovelEditorApp:
                 event_bus = get_event_bus()
                 if event_bus:
                     logger.info("关闭事件总线...")
-                    # 使用异步关闭方法
+                    # 优先使用 asyncio.run，在无事件循环时优雅关闭；若当前线程已有事件循环，则退回同步关闭
                     try:
-                        loop = asyncio.get_event_loop()
-                        if loop.is_closed():
-                            loop = asyncio.new_event_loop()
-                            asyncio.set_event_loop(loop)
-                        loop.run_until_complete(event_bus.shutdown_async())
+                        asyncio.run(event_bus.shutdown_async())
+                    except RuntimeError:
+                        # 可能是“Cannot be called from a running event loop”
+                        try:
+                            loop = asyncio.get_running_loop()
+                            # 尝试在线程安全地提交到该循环
+                            future = asyncio.run_coroutine_threadsafe(event_bus.shutdown_async(), loop)
+                            future.result(timeout=2)
+                        except Exception as e:
+                            logger.warning(f"异步关闭事件总线失败，使用同步方法: {e}")
+                            event_bus.shutdown()
                     except Exception as e:
                         logger.warning(f"异步关闭事件总线失败，使用同步方法: {e}")
                         event_bus.shutdown()

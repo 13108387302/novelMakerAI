@@ -85,6 +85,8 @@ class ThemeManager(QObject):
             "text_secondary": "#4a4a4a",
             "text_disabled": "#8a8a8a",
             "text_hint": "#6a6a6a",
+            # 兼容旧样式键
+            "text": "#1a1a1a",
             
             # 边框颜色
             "border": "#DEE2E6",
@@ -132,6 +134,8 @@ class ThemeManager(QObject):
             "text_secondary": "#b8b8b8",
             "text_disabled": "#888888",
             "text_hint": "#a0a0a0",
+            # 兼容旧样式键
+            "text": "#e8e8e8",
             
             # 边框颜色 - 更柔和的边框
             "border": "#4a4a4a",
@@ -346,12 +350,18 @@ class ThemeManager(QObject):
             border: 1px solid {colors['border']};
             border-radius: 6px;
             padding: 8px 12px;
+            color: {colors['text_primary']};
             selection-background-color: {colors['selection']};
+            selection-color: {colors['surface']};
         }}
-        
+
         QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus {{
             border-color: {colors['primary']};
             outline: none;
+        }}
+
+        QLineEdit::placeholder, QTextEdit::placeholder, QPlainTextEdit::placeholder {{
+            color: {colors['text_hint']};
         }}
         
         /* 标签页 */

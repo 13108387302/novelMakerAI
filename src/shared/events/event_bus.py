@@ -362,18 +362,43 @@ class EventBus:
         logger.info("事件总线已关闭")
 
     async def shutdown_async(self) -> None:
-        """关闭事件总线（异步版本）"""
+        """关闭事件总线（异步版本，跨事件循环安全）"""
         self._is_running = False
 
-        if self._processing_task is not None and not self._processing_task.done():
+        task = self._processing_task
+        if task is not None and not task.done():
             logger.info("取消事件处理任务...")
-            self._processing_task.cancel()
+            # 尝试在任务所属事件循环中取消
             try:
-                await self._processing_task
-            except asyncio.CancelledError:
-                logger.info("事件处理任务已取消")
-            except Exception as e:
-                logger.warning(f"取消事件处理任务时出错: {e}")
+                task_loop = task.get_loop()
+            except Exception:
+                task_loop = None
+            if task_loop:
+                try:
+                    task_loop.call_soon_threadsafe(task.cancel)
+                except Exception:
+                    try:
+                        task.cancel()
+                    except Exception:
+                        pass
+            else:
+                try:
+                    task.cancel()
+                except Exception:
+                    pass
+
+            # 仅当当前运行循环与任务循环相同时才等待
+            try:
+                current_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                current_loop = None
+            if current_loop is not None and task_loop is current_loop:
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    logger.info("事件处理任务已取消")
+                except Exception as e:
+                    logger.warning(f"取消事件处理任务时出错: {e}")
 
         self.clear_subscriptions()
         logger.info("事件总线已关闭")

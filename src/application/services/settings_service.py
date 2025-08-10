@@ -56,8 +56,18 @@ class SettingsService(BaseConfigManager):
         self.settings = settings
         self.event_bus = event_bus
 
-        # 调用父类构造函数
-        super().__init__(settings.data_dir)
+        # 调用父类构造函数（使用项目内配置目录）
+        from src.shared.project_context import ProjectPaths
+        from src.shared.ioc.container import get_global_container
+        container = get_global_container()
+        if container:
+            project_paths = container.try_get(ProjectPaths)
+            if project_paths:
+                super().__init__(project_paths.config_dir)
+            else:
+                raise RuntimeError("SettingsService需要项目上下文，但未找到ProjectPaths")
+        else:
+            raise RuntimeError("SettingsService需要全局容器，但未找到")
 
         # 迁移设置（添加缺失的字段）
         self._migrate_settings()
@@ -258,13 +268,9 @@ class SettingsService(BaseConfigManager):
                 logger.info(f"设置更新成功: {key} = {value}")
                 return True
             else:
-                # 回滚更改
-                if old_value is not None:
-                    current[keys[-1]] = old_value
-                else:
-                    current.pop(keys[-1], None)
+                # 设置失败，直接返回False（回滚由底层配置管理负责，避免未定义变量）
                 return False
-                
+
         except Exception as e:
             logger.error(f"设置值失败: {key}, {e}")
             return False

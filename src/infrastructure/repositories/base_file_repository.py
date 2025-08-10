@@ -16,7 +16,7 @@ from abc import ABC, abstractmethod
 
 from src.shared.utils.logger import get_logger
 from src.shared.utils.error_handler import handle_async_errors, RepositoryError
-from src.shared.utils.file_utils import FileManager
+from src.shared.utils.file_operations import get_file_operations
 
 logger = get_logger(__name__)
 
@@ -26,13 +26,14 @@ T = TypeVar('T')
 class BaseFileRepository(Generic[T], ABC):
     """文件仓储基类"""
     
-    def __init__(self, base_path: Optional[Path] = None, entity_name: str = "entity"):
+    def __init__(self, base_path: Path, entity_name: str = "entity"):
         self.entity_name = entity_name
-        self.base_path = base_path or Path.home() / ".novel_editor" / f"{entity_name}s"
+        self.base_path = base_path
 
-        # 使用FileManager进行文件操作
-        self.file_manager = FileManager()
-        self.file_manager.ensure_directory(self.base_path)
+        # 使用统一的文件操作接口
+        self.file_ops = get_file_operations()
+        # 确保基础目录存在
+        self.base_path.mkdir(parents=True, exist_ok=True)
 
         # 索引文件
         self.index_file = self.base_path / f"{entity_name}s_index.json"
@@ -40,53 +41,34 @@ class BaseFileRepository(Generic[T], ABC):
 
         # 备份目录
         self.backup_path = self.base_path / "backups"
-        self.file_manager.ensure_directory(self.backup_path)
-    
+        self.backup_path.mkdir(parents=True, exist_ok=True)
+
     def _ensure_index_file(self) -> None:
         """确保索引文件存在"""
         if not self.index_file.exists():
             self._save_index({})
     
     def _load_index(self) -> Dict[str, Any]:
-        """加载索引"""
+        """加载索引（同步，避免事件循环冲突）"""
         try:
+            if not self.index_file.exists():
+                return {}
             with open(self.index_file, 'r', encoding='utf-8') as f:
-                return json.load(f)
+                return json.load(f) or {}
         except Exception as e:
             logger.error(f"加载{self.entity_name}索引失败: {e}")
             return {}
-    
+
     def _save_index(self, index: Dict[str, Any]) -> None:
-        """保存索引"""
-        temp_file = None
+        """保存索引（同步原子写入）"""
         try:
-            # 创建备份
-            if self.index_file.exists():
-                backup_file = self.backup_path / f"{self.entity_name}s_index_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-                shutil.copy2(self.index_file, backup_file)
-
-                # 清理旧备份（保留最近10个）
-                self._cleanup_backups(f"{self.entity_name}s_index_backup_*.json", 10)
-
-            # 使用临时文件确保原子性写入
-            temp_file = self.index_file.with_suffix('.tmp')
+            self.index_file.parent.mkdir(parents=True, exist_ok=True)
+            temp_file = self.index_file.with_suffix(self.index_file.suffix + '.tmp')
             with open(temp_file, 'w', encoding='utf-8') as f:
                 json.dump(index, f, ensure_ascii=False, indent=2)
-
-            # 验证写入的文件
-            with open(temp_file, 'r', encoding='utf-8') as f:
-                json.load(f)
-
-            # 原子性替换
+            # 原子替换
             temp_file.replace(self.index_file)
-
         except Exception as e:
-            # 清理临时文件
-            if temp_file and temp_file.exists():
-                try:
-                    temp_file.unlink()
-                except Exception:
-                    pass
             logger.error(f"保存{self.entity_name}索引失败: {e}")
             raise RepositoryError(f"保存{self.entity_name}索引失败: {e}")
     
@@ -102,17 +84,16 @@ class BaseFileRepository(Generic[T], ABC):
     async def _load_entity_file(self, entity_id: str) -> Optional[Dict[str, Any]]:
         """加载实体文件"""
         entity_path = self._get_entity_path(entity_id)
-        
+
         if not entity_path.exists():
             return None
-        
+
         try:
-            def _load():
-                with open(entity_path, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            
-            return await asyncio.get_event_loop().run_in_executor(None, _load)
-            
+            return await self.file_ops.load_json_cached(
+                file_path=entity_path,
+                cache_key=f"{self.entity_name}:{entity_id}",
+                cache_ttl=300
+            )
         except Exception as e:
             logger.error(f"加载{self.entity_name}文件失败 {entity_id}: {e}")
             raise RepositoryError(f"加载{self.entity_name}文件失败: {e}")
@@ -121,40 +102,17 @@ class BaseFileRepository(Generic[T], ABC):
     async def _save_entity_file(self, entity_id: str, data: Dict[str, Any]) -> None:
         """保存实体文件"""
         entity_path = self._get_entity_path(entity_id)
-        temp_file = entity_path.with_suffix('.tmp')
 
         try:
-            # 创建备份
-            if entity_path.exists():
-                backup_file = self.backup_path / f"{entity_id}_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-                await asyncio.get_event_loop().run_in_executor(None, shutil.copy2, entity_path, backup_file)
-
-                # 清理旧备份
-                await asyncio.get_event_loop().run_in_executor(
-                    None, self._cleanup_backups, f"{entity_id}_backup_*.json", 5
-                )
-
-            # 使用临时文件确保原子性写入
-            def _save():
-                with open(temp_file, 'w', encoding='utf-8') as f:
-                    json.dump(data, f, ensure_ascii=False, indent=2)
-
-                # 验证写入的文件
-                with open(temp_file, 'r', encoding='utf-8') as f:
-                    json.load(f)
-
-                # 原子性替换
-                temp_file.replace(entity_path)
-
-            await asyncio.get_event_loop().run_in_executor(None, _save)
+            await self.file_ops.save_json_atomic(
+                file_path=entity_path,
+                data=data,
+                create_backup=True,
+                cache_key=f"{self.entity_name}:{entity_id}",
+                cache_ttl=300
+            )
 
         except Exception as e:
-            # 清理临时文件
-            if temp_file.exists():
-                try:
-                    await asyncio.get_event_loop().run_in_executor(None, temp_file.unlink)
-                except Exception:
-                    pass
             logger.error(f"保存{self.entity_name}文件失败 {entity_id}: {e}")
             raise RepositoryError(f"保存{self.entity_name}文件失败: {e}")
     

@@ -206,8 +206,24 @@ class MenuBuilder(QObject):
         view_menu.addAction(status_panel_action)
         self.actions["toggle_status_panel"] = status_panel_action
 
+        # AI 控制台（底部，默认隐藏）
+        ai_console_action = QAction("AI 控制台(&C)", main_window)
+        ai_console_action.setCheckable(True)
+        ai_console_action.setChecked(False)
+        ai_console_action.triggered.connect(lambda: self._emit_action("toggle_ai_console", ai_console_action))
+        view_menu.addAction(ai_console_action)
+        self.actions["toggle_ai_console"] = ai_console_action
+
+        # 输出面板（底部，默认隐藏）
+        output_panel_action = QAction("输出面板(&O)", main_window)
+        output_panel_action.setCheckable(True)
+        output_panel_action.setChecked(False)
+        output_panel_action.triggered.connect(lambda: self._emit_action("toggle_output_panel", output_panel_action))
+        view_menu.addAction(output_panel_action)
+        self.actions["toggle_output_panel"] = output_panel_action
+
         view_menu.addSeparator()
-        
+
         # 语法高亮
         syntax_highlight_action = QAction("语法高亮(&S)", main_window)
         syntax_highlight_action.setCheckable(True)
@@ -215,16 +231,16 @@ class MenuBuilder(QObject):
         syntax_highlight_action.triggered.connect(lambda: self._emit_action("toggle_syntax_highlighting", syntax_highlight_action))
         view_menu.addAction(syntax_highlight_action)
         self.actions["toggle_syntax_highlighting"] = syntax_highlight_action
-        
+
         view_menu.addSeparator()
-        
+
         # 全屏
         fullscreen_action = QAction("全屏(&F)", main_window)
         fullscreen_action.setShortcut(QKeySequence("F11"))
         fullscreen_action.triggered.connect(lambda: self._emit_action("toggle_fullscreen", fullscreen_action))
         view_menu.addAction(fullscreen_action)
         self.actions["toggle_fullscreen"] = fullscreen_action
-        
+
     def _create_ai_menu(self, menubar: QMenuBar, main_window):
         """创建AI菜单（简化版）"""
         ai_menu = menubar.addMenu("AI助手(&A)")

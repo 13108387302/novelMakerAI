@@ -107,8 +107,12 @@ class TextFormatHandler(BaseFormatHandler):
             
             # 写入文件
             final_content = "\n".join(content_parts)
-            return self._write_file_content(output_path, final_content, options.output_encoding)
-            
+            # 统一原子写入
+            from src.shared.utils.file_operations import get_file_operations
+            return await get_file_operations("import_export").save_text_atomic(
+                output_path, final_content, create_backup=True
+            )
+
         except Exception as e:
             logger.error(f"导出文本失败: {e}")
             return False
@@ -122,7 +126,9 @@ class TextFormatHandler(BaseFormatHandler):
                 return None
 
             # 读取文件内容
-            content = self._read_file_content(input_path, options.import_encoding)
+            # 统一读取（带编码回退）
+            from src.shared.utils.file_operations import get_file_operations
+            content = await get_file_operations("import_export").load_text_safe(input_path)
             if not content:
                 logger.error("无法读取文件内容")
                 return None
@@ -185,8 +191,11 @@ class TextFormatHandler(BaseFormatHandler):
             
             # 写入文件
             final_content = "\n".join(content_parts)
-            return self._write_file_content(output_path, final_content, options.output_encoding)
-            
+            from src.shared.utils.file_operations import get_file_operations
+            return await get_file_operations("import_export").save_text_atomic(
+                output_path, final_content, create_backup=True
+            )
+
         except Exception as e:
             logger.error(f"导出文档为文本失败: {e}")
             return False
@@ -200,7 +209,8 @@ class TextFormatHandler(BaseFormatHandler):
                 return None
 
             # 读取文件内容
-            content = self._read_file_content(input_path, options.import_encoding)
+            from src.shared.utils.file_operations import get_file_operations
+            content = await get_file_operations("import_export").load_text_safe(input_path)
             if not content:
                 logger.error("无法读取文件内容")
                 return None

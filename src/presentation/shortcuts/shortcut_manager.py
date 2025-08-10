@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from PyQt6.QtWidgets import QWidget, QApplication
-from PyQt6.QtCore import QObject, pyqtSignal
+from PyQt6.QtCore import QObject, pyqtSignal, Qt
 from PyQt6.QtGui import QShortcut, QKeySequence, QAction
 
 from src.shared.utils.logger import get_logger
@@ -147,10 +147,12 @@ class ShortcutManager(QObject):
             
             # 创建新的快捷键
             shortcut = QShortcut(QKeySequence(sequence), self.parent_widget)
+            # 提升快捷键上下文，确保在编辑器等子控件聚焦时也能触发
+            shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
             shortcut.activated.connect(lambda: self._on_shortcut_activated(key, action))
-            
+
             self._qt_shortcuts[key] = shortcut
-            
+
         except Exception as e:
             logger.error(f"创建Qt快捷键失败: {key}, {e}")
     

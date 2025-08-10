@@ -108,15 +108,14 @@ src/
 │   └── repositories/    # 🗃️ 仓库接口
 ├── application/         # 🔧 应用层 - 业务用例协调
 │   └── services/        # 🛠️ 应用服务
-│       ├── ai/          # AI相关服务
+│       ├── ai/          # AI相关服务（core/ intelligence/）
 │       ├── search/      # 搜索服务
 │       ├── project_service.py
-│       ├── document_service.py
-│       └── ai_assistant_manager.py
+│       └── document_service.py
 ├── infrastructure/     # 🔌 基础设施层 - 技术实现
-│   ├── ai_clients/     # 🤖 AI服务客户端
-│   │   ├── openai_client.py
-│   │   └── deepseek_client.py
+│   ├── ai/             # 🤖 AI服务（统一管理与客户端）
+│   │   ├── clients/    # 各提供商客户端
+│   │   └── unified_ai_client_manager.py
 │   └── repositories/   # 💾 仓库实现
 │       ├── file_project_repository.py
 │       └── file_document_repository.py
@@ -590,40 +589,41 @@ python scripts/publish_plugin.py my_plugin/
 
 ### 🔧 核心服务API
 
-#### 🤖 AIService - AI服务
+### ✅ 新版 AI 服务用法（替代旧 AIService）
 ```python
-from src.application.services.ai_service import AIService
+from src.application.services.ai.core.ai_orchestration_service import AIOrchestrationService
 
-# 初始化服务
-ai_service = AIService()
+config = {
+    'providers': {
+        'deepseek': {
+            'api_key': 'YOUR_KEY',
+            'base_url': 'https://api.deepseek.com/v1',
+            'default_model': 'deepseek-chat'
+        }
+    },
+    'default_provider': 'deepseek'
+}
+ai = AIOrchestrationService(config)
+await ai.initialize()
 
-# 文本生成
-text = await ai_service.generate_text(
-    prompt="写一段对话",
-    context="现代都市背景",
-    max_tokens=500,
-    temperature=0.7
-)
+# 文本生成（非流式）
+text = await ai.generate_text(prompt="写一段对话", context="现代都市背景")
 
-# 流式文本生成
-async for chunk in ai_service.generate_text_stream(
-    prompt="续写故事",
-    context="主角走进了神秘的房间"
-):
-    print(chunk, end='', flush=True)
+# 文本生成（流式）
+async for chunk in ai.generate_text_stream(prompt="续写故事"):
+    print(chunk, end="")
 
-# 文本分析
-analysis = await ai_service.analyze_text(
-    text="要分析的文本",
-    analysis_type="style"  # style, emotion, structure
-)
+# 文本分析（兼容旧API）
+analysis = await ai.analyze_text(text="需要分析的文本", analysis_type="style")
 
-# 获取AI建议
-suggestions = await ai_service.get_writing_suggestions(
-    text="当前文本",
-    suggestion_type="improve"  # improve, expand, dialogue
-)
+# 文本改进（兼容旧API）
+improved = await ai.improve_text(text="需要润色的文本", improvement_type="refine")
 ```
+> 说明：旧的 `AIService` 与 `IAIServiceRepository` 已被统一编排服务替代。仓储接口仍可用，但通过适配器委托到新服务。
+
+
+#### ⚠️ 兼容说明（旧 AIService 示例）
+该示例已过时，请参考上方“新版 AI 服务用法”。若需兼容旧插件/调用方，可通过 AIOrchestrationService 的兼容方法 generate_text/generate_text_stream/analyze_text/improve_text 实现同等能力。
 
 #### 📚 ProjectService - 项目管理
 ```python
@@ -633,14 +633,12 @@ project_service = ProjectService()
 
 # 创建项目
 project = await project_service.create_project(
-    title="我的小说",
-    path="/path/to/project",
-    template="novel",  # novel, short_story, script
-    settings={
-        "target_words": 80000,
-        "genre": "科幻",
-        "author": "作者名"
-    }
+    name="我的小说",
+    project_type=ProjectType.NOVEL,
+    description="",
+    author="作者名",
+    target_word_count=80000,
+    project_path="/path/to/project"
 )
 
 # 打开项目

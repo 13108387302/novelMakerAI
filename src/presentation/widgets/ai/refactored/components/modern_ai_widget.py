@@ -9,7 +9,7 @@
 import logging
 from typing import Dict, Any, Optional, List
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QTextEdit, QLabel, 
+    QWidget, QVBoxLayout, QHBoxLayout, QTextEdit, QLabel,
     QPushButton, QFrame, QScrollArea, QGroupBox, QGraphicsDropShadowEffect,
     QProgressBar, QSizePolicy
 )
@@ -26,20 +26,26 @@ logger = logging.getLogger(__name__)
 
 class ModernAIWidget(QWidget):
     """现代化AI组件基类"""
-    
+
     # 信号定义
     ai_request = pyqtSignal(str, dict)  # AI请求信号
     status_changed = pyqtSignal(str, str)  # 状态变化信号
+    # 应用到编辑器（兼容旧连接）
+    text_applied = pyqtSignal(str)
+    # 更精细的写回信号
+    text_insert_requested = pyqtSignal(str, int)  # 文本、插入位置（-1=当前光标）
+    text_replace_requested = pyqtSignal(str, int, int)  # 文本、起止位置
 
     # 线程安全的UI更新信号
     ui_update_signal = pyqtSignal(str)  # 用于线程安全的UI更新
-    
+
     def __init__(self, parent=None, settings_service=None):
         super().__init__(parent)
         self.selected_text = ""
         self.document_context = ""
         self.document_type = "chapter"
         self.document_metadata = {}
+        self._cursor_position: Optional[int] = None  # 用于局部上下文提取
 
         # AI服务引用
         self.ai_orchestration_service = None
@@ -71,20 +77,23 @@ class ModernAIWidget(QWidget):
         # 初始化文档上下文管理器
         self._initialize_context_manager()
 
+        # 兼容旧版上下文更新接口
+        self._current_document_id: Optional[str] = None
+
         logger.debug("现代化AI组件初始化完成")
-    
+
     def _setup_widget_properties(self):
         """设置组件属性"""
         self.setObjectName("ModernAIWidget")
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        
+
         # 添加阴影效果
         shadow = QGraphicsDropShadowEffect()
         shadow.setBlurRadius(10)
         shadow.setColor(QColor(0, 0, 0, 30))
         shadow.setOffset(0, 2)
         self.setGraphicsEffect(shadow)
-    
+
     def _create_scroll_area(self):
         """创建滚动区域"""
         # 创建滚动区域
@@ -93,17 +102,17 @@ class ModernAIWidget(QWidget):
         self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)
-        
+
         # 创建滚动内容容器
         self.scroll_content = QWidget()
         self.scroll_layout = QVBoxLayout(self.scroll_content)
         self.scroll_layout.setContentsMargins(16, 16, 16, 16)
         self.scroll_layout.setSpacing(16)
-        
+
         # 设置滚动内容
         self.scroll_area.setWidget(self.scroll_content)
         self.main_layout.addWidget(self.scroll_area)
-    
+
     def _apply_modern_styles(self):
         """应用现代化样式"""
         self.setStyleSheet(get_complete_ai_style())
@@ -150,12 +159,12 @@ class ModernAIWidget(QWidget):
         except Exception as e:
             logger.warning(f"文档上下文管理器初始化失败: {e}")
             self.context_manager = None
-    
-    def create_modern_button(self, text: str, icon: str = "", style_type: str = "default", 
+
+    def create_modern_button(self, text: str, icon: str = "", style_type: str = "default",
                            tooltip: str = "", callback=None) -> QPushButton:
         """
         创建现代化按钮
-        
+
         Args:
             text: 按钮文本
             icon: 图标（emoji或图标字符）
@@ -166,50 +175,50 @@ class ModernAIWidget(QWidget):
         button = QPushButton(f"{icon} {text}" if icon else text)
         button.setToolTip(tooltip or text)
         button.setCursor(Qt.CursorShape.PointingHandCursor)
-        
+
         # 设置按钮样式
         if style_type in SPECIAL_BUTTON_STYLES:
             button.setStyleSheet(SPECIAL_BUTTON_STYLES[style_type])
-        
+
         # 连接回调
         if callback:
             button.clicked.connect(callback)
-        
+
         # 添加悬停动画效果
         self._add_button_animation(button)
-        
+
         return button
-    
+
     def _add_button_animation(self, button: QPushButton):
         """为按钮添加动画效果"""
         # 这里可以添加更复杂的动画效果
         # 目前通过CSS的hover效果实现
         pass
-    
+
     def create_modern_group(self, title: str, icon: str = "") -> QGroupBox:
         """
         创建现代化组框
-        
+
         Args:
             title: 组框标题
             icon: 图标
         """
         group = QGroupBox(f"{icon} {title}" if icon else title)
         group.setObjectName("ModernGroup")
-        
+
         # 添加阴影效果
         shadow = QGraphicsDropShadowEffect()
         shadow.setBlurRadius(8)
         shadow.setColor(QColor(0, 0, 0, 20))
         shadow.setOffset(0, 1)
         group.setGraphicsEffect(shadow)
-        
+
         return group
-    
+
     def create_status_indicator(self, text: str = "就绪", status: str = "info") -> QLabel:
         """
         创建状态指示器
-        
+
         Args:
             text: 状态文本
             status: 状态类型 (success, warning, error, info)
@@ -218,9 +227,9 @@ class ModernAIWidget(QWidget):
         indicator.setProperty("status", status)
         indicator.setAlignment(Qt.AlignmentFlag.AlignCenter)
         indicator.setObjectName("StatusIndicator")
-        
+
         return indicator
-    
+
     def create_output_area(self, placeholder: str = "AI响应将显示在这里...") -> QScrollArea:
         """创建带滚动条的输出区域"""
         from PyQt6.QtWidgets import QScrollArea
@@ -359,39 +368,39 @@ class ModernAIWidget(QWidget):
         """创建按钮行布局"""
         layout = QHBoxLayout()
         layout.setSpacing(12)
-        
+
         for button in buttons:
             layout.addWidget(button)
-        
+
         layout.addStretch()  # 添加弹性空间
         return layout
-    
+
     def create_card_frame(self) -> QFrame:
         """创建卡片框架"""
         frame = QFrame()
         frame.setObjectName("CardFrame")
         frame.setFrameShape(QFrame.Shape.Box)
-        
+
         # 添加阴影效果
         shadow = QGraphicsDropShadowEffect()
         shadow.setBlurRadius(12)
         shadow.setColor(QColor(0, 0, 0, 15))
         shadow.setOffset(0, 2)
         frame.setGraphicsEffect(shadow)
-        
+
         return frame
-    
+
     def show_status(self, message: str, status_type: str = "info"):
         """
         显示状态信息
-        
+
         Args:
             message: 状态消息
             status_type: 状态类型 (success, warning, error, info)
         """
         # 发射状态变化信号
         self.status_changed.emit(message, status_type)
-        
+
         # 如果有状态指示器，更新它
         if hasattr(self, 'status_indicator'):
             self.status_indicator.setText(message)
@@ -399,28 +408,49 @@ class ModernAIWidget(QWidget):
             # 强制刷新样式
             self.status_indicator.style().unpolish(self.status_indicator)
             self.status_indicator.style().polish(self.status_indicator)
-        
+
         logger.info(f"状态更新: {message} ({status_type})")
-    
+
     def add_to_layout(self, widget: QWidget):
         """添加组件到滚动布局"""
         self.scroll_layout.addWidget(widget)
-    
+
     def add_stretch(self):
         """添加弹性空间"""
         self.scroll_layout.addStretch()
-    
+
     def set_selected_text(self, text: str):
         """设置选中文本"""
         self.selected_text = text
         logger.debug(f"设置选中文本: {len(text)} 字符")
+
+    # ===== 兼容旧版/外部调用的上下文接口 =====
+    def set_context(self, document_context: str = "", selected_text: str = "", document_id: Optional[str] = None, document_type: str = "chapter"):
+        self.document_context = document_context or ""
+        self.selected_text = selected_text or ""
+        self._current_document_id = document_id
+        self.document_type = document_type or "chapter"
+
+    def update_document_context_external(self, document_id: Optional[str], content: str, selected_text: str = "", document_type: Optional[str] = None) -> None:
+        try:
+            if document_type is None:
+                document_type = self.document_type or "chapter"
+            self.set_context(
+                document_context=content or "",
+                selected_text=selected_text or "",
+                document_id=document_id,
+                document_type=document_type,
+            )
+        except Exception as e:
+            logger = logging.getLogger(__name__)
+            logger.warning(f"更新AI上下文失败: {e}")
 
     def set_context(self, content: str, selected_text: str = ""):
         """设置上下文（兼容性方法）"""
         self.document_context = content
         self.selected_text = selected_text
         logger.debug(f"设置上下文: {len(content)} 字符内容, {len(selected_text)} 字符选中文本")
-    
+
     def set_document_context(self, content: str, doc_type: str = "chapter", metadata: dict = None):
         """设置文档上下文"""
         if metadata is None:
@@ -444,7 +474,7 @@ class ModernAIWidget(QWidget):
                     self.ai_panel.set_document_context(content)
             except Exception as e:
                 logger.debug(f"更新AI面板上下文失败: {e}")
-    
+
     def execute_ai_request(self, function_name: str, prompt: str, options: dict = None):
         """
         执行AI请求
@@ -537,10 +567,10 @@ class ModernAIWidget(QWidget):
 
             # 处理请求
             if use_streaming:
-                await self._process_streaming_request(request, function_name)
+                await self._process_streaming_request(request, function_name, options)
             else:
                 response = await self.ai_orchestration_service.process_request(request)
-                self._handle_ai_response(response, function_name)
+                self._handle_ai_response(response, function_name, options)
 
         except Exception as e:
             logger.error(f"AI请求处理失败: {e}")
@@ -554,9 +584,29 @@ class ModernAIWidget(QWidget):
         # 基础提示词
         full_prompt = f"任务: {function_name}\n\n"
 
-        # 添加上下文信息
-        if self.document_context:
-            full_prompt += f"文档上下文:\n{self.document_context[:1000]}...\n\n"
+        # 根据功能类型选择上下文拼接策略
+        func_type = (options or {}).get('type', '').lower()
+
+        def _extract_local_context(before: int = 400, after: int = 120) -> str:
+            text = self.document_context or ""
+            if not text:
+                return ""
+            pos = self._cursor_position
+            if pos is None or pos < 0 or pos > len(text):
+                return text[-(before + after):]
+            start = max(0, pos - before)
+            end = min(len(text), pos + after)
+            return text[start:end]
+
+        if func_type in {"continue", "dialogue", "scene"}:
+            local_ctx = _extract_local_context()
+            if local_ctx:
+                full_prompt += f"附近上下文片段:\n{local_ctx}\n\n"
+            elif self.document_context:
+                full_prompt += f"文档上下文:\n{self.document_context[:1000]}...\n\n"
+        else:
+            if self.document_context:
+                full_prompt += f"文档上下文:\n{self.document_context[:1000]}...\n\n"
 
         if self.selected_text:
             full_prompt += f"选中文本:\n{self.selected_text}\n\n"
@@ -582,6 +632,13 @@ class ModernAIWidget(QWidget):
         full_prompt += f"要求: {guide}"
 
         return full_prompt
+
+    def update_cursor_position(self, position: int) -> None:
+        """由编辑器通知光标位置，便于提取局部上下文"""
+        try:
+            self._cursor_position = int(position)
+        except Exception:
+            self._cursor_position = None
 
     def _display_ai_response(self, content: str):
         """显示AI响应 - 统一使用流式输出方法"""
@@ -702,7 +759,7 @@ class ModernAIWidget(QWidget):
             logger.warning(f"获取流式输出设置失败: {e}")
             return True  # 默认启用流式输出
 
-    async def _process_streaming_request(self, request, function_name: str):
+    async def _process_streaming_request(self, request, function_name: str, options: dict):
         """处理流式AI请求 - 增强调试版本"""
         logger.info(f"🚀 开始流式处理请求: {function_name}")
 
@@ -749,18 +806,39 @@ class ModernAIWidget(QWidget):
             self._safe_ui_update(lambda: self.show_status(f"{function_name} 完成", "success"))
             logger.info(f"🎉 流式处理完成，共处理 {chunk_count} 个块，总长度 {len(accumulated_content)} 字符")
 
+            # 智能续写默认自动插入
+            try:
+                auto_apply = True
+                if self.settings_service:
+                    auto_apply = self.settings_service.get('ai.auto_apply_continue', True)
+                if (options or {}).get('type') == 'continue' and auto_apply and accumulated_content.strip():
+                    self.text_insert_requested.emit(accumulated_content, -1)
+                    self.text_applied.emit(accumulated_content)
+            except Exception:
+                pass
+
         except Exception as e:
             logger.error(f"❌ 流式处理失败: {e}", exc_info=True)
             error_msg = f"❌ 流式处理失败: {str(e)}"
             self._safe_ui_update(lambda: self.show_status(f"{function_name} 失败", "error"))
             self._safe_ui_update(lambda msg=error_msg: self._display_ai_response(msg))
 
-    def _handle_ai_response(self, response, function_name: str):
+    def _handle_ai_response(self, response, function_name: str, options: dict):
         """处理AI响应（非流式）"""
         if response.is_successful:
             # 在主线程中更新UI
             QTimer.singleShot(0, lambda: self.show_status(f"{function_name} 完成", "success"))
             QTimer.singleShot(0, lambda: self._display_ai_response(response.content))
+            # 非流式也支持自动插入
+            try:
+                auto_apply = True
+                if self.settings_service:
+                    auto_apply = self.settings_service.get('ai.auto_apply_continue', True)
+                if (options or {}).get('type') == 'continue' and auto_apply and response.content.strip():
+                    self.text_insert_requested.emit(response.content, -1)
+                    self.text_applied.emit(response.content)
+            except Exception:
+                pass
         else:
             # 在主线程中更新UI
             error_msg = f"❌ {response.error_message or '处理失败'}"

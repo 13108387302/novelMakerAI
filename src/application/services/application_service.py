@@ -82,21 +82,9 @@ class ApplicationService:
             return False
     
     def _ensure_directories(self) -> None:
-        """确保必要的目录存在"""
-        directories = [
-            self.settings.data_dir,
-            self.settings.cache_dir,
-            self.settings.log_dir,
-            self.settings.data_dir / "projects",
-            self.settings.data_dir / "documents",
-            self.settings.data_dir / "characters",
-            self.settings.data_dir / "templates",
-            self.settings.data_dir / "backups",
-        ]
-        
-        for directory in directories:
-            directory.mkdir(parents=True, exist_ok=True)
-            logger.debug(f"确保目录存在: {directory}")
+        """确保项目目录存在（现在由项目上下文管理）"""
+        # 项目目录现在由 ProjectPaths 和 ensure_project_dirs 管理
+        logger.info("项目目录由项目上下文管理，跳过应用级目录创建")
     
     @safe_execute("事件订阅设置")
     def _setup_event_subscriptions(self) -> None:
@@ -156,24 +144,12 @@ class ApplicationService:
             # 确保目录存在
             state_file.parent.mkdir(parents=True, exist_ok=True)
 
-            # 使用临时文件确保原子性写入
-            temp_file = state_file.with_suffix('.tmp')
-            try:
-                with open(temp_file, 'w', encoding='utf-8') as f:
-                    json.dump(state, f, indent=2, ensure_ascii=False)
-
-                # 验证写入的文件
-                with open(temp_file, 'r', encoding='utf-8') as f:
-                    json.load(f)  # 验证JSON格式
-
-                # 原子性替换
-                temp_file.replace(state_file)
-
-            except Exception:
-                # 清理临时文件
-                if temp_file.exists():
-                    temp_file.unlink()
-                raise
+            # 统一文件操作进行原子性写入
+            from src.shared.utils.file_operations import get_file_operations
+            ops = get_file_operations("app_state")
+            import asyncio
+            loop = asyncio.get_event_loop()
+            loop.run_until_complete(ops.save_json_atomic(state_file, state, create_backup=True))
 
             logger.debug("应用程序状态保存完成")
 

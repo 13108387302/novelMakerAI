@@ -10,7 +10,7 @@ import time
 from typing import Optional
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTextEdit, QTabWidget,
-    QLabel, QToolBar, QFrame, QSplitter
+    QLabel, QToolBar, QFrame, QSplitter, QPushButton
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont, QTextCursor, QAction
@@ -1135,7 +1135,106 @@ class EditorWidget(QWidget):
         welcome_widget = QWidget()
         welcome_layout = QVBoxLayout(welcome_widget)
         welcome_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        
+        welcome_layout.setSpacing(30)
+
+        # 检查是否有当前项目
+        current_project = self._get_current_project()
+
+        if current_project:
+            # 项目已打开，显示项目相关的欢迎信息
+            self._create_project_welcome_content(welcome_layout, current_project)
+        else:
+            # 没有项目，显示通用欢迎信息
+            self._create_general_welcome_content(welcome_layout)
+
+        self.tab_widget.addTab(welcome_widget, "欢迎")
+
+    def _get_current_project(self):
+        """获取当前项目"""
+        try:
+            # 尝试从全局容器获取项目服务
+            from src.shared.ioc.container import get_global_container
+            container = get_global_container()
+            if container:
+                from src.application.services.project_service import ProjectService
+                project_service = container.get(ProjectService)
+                if project_service and project_service.has_current_project:
+                    return project_service.current_project
+        except Exception as e:
+            logger.debug(f"获取当前项目失败: {e}")
+        return None
+
+    def _create_project_welcome_content(self, layout, project):
+        """创建项目相关的欢迎内容"""
+        # 项目信息
+        project_info = QLabel(f"""
+        <div style="text-align: center;">
+            <h2>📚 {project.title}</h2>
+            <p style="font-size: 12pt; color: #666; margin: 10px 0;">项目已打开</p>
+        </div>
+        """)
+        project_info.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(project_info)
+
+        # 快速操作按钮
+        buttons_layout = QHBoxLayout()
+        buttons_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        buttons_layout.setSpacing(20)
+
+        # 创建新文档按钮
+        create_doc_btn = QPushButton("📝 创建新文档")
+        create_doc_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                border: none;
+                padding: 12px 24px;
+                border-radius: 8px;
+                font-size: 12pt;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #45a049;
+            }
+        """)
+        create_doc_btn.clicked.connect(self._on_create_document_clicked)
+        buttons_layout.addWidget(create_doc_btn)
+
+        # 创建模板文档按钮
+        template_btn = QPushButton("📋 使用模板")
+        template_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2196F3;
+                color: white;
+                border: none;
+                padding: 12px 24px;
+                border-radius: 8px;
+                font-size: 12pt;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #1976D2;
+            }
+        """)
+        template_btn.clicked.connect(self._on_create_template_clicked)
+        buttons_layout.addWidget(template_btn)
+
+        layout.addLayout(buttons_layout)
+
+        # 提示文本
+        hint_label = QLabel("""
+        <div style="text-align: center;">
+            <p style="color: #888; font-size: 11pt;">
+                从左侧项目树选择文档开始编辑<br>
+                或使用上方按钮快速创建新内容
+            </p>
+        </div>
+        """)
+        hint_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(hint_label)
+
+    def _create_general_welcome_content(self, layout):
+        """创建通用欢迎内容"""
         # 欢迎文本
         welcome_label = QLabel("""
         <div style="text-align: center;">
@@ -1146,10 +1245,89 @@ class EditorWidget(QWidget):
         </div>
         """)
         welcome_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        welcome_layout.addWidget(welcome_label)
-        
-        self.tab_widget.addTab(welcome_widget, "欢迎")
-    
+        layout.addWidget(welcome_label)
+
+    def _on_create_document_clicked(self):
+        """创建新文档按钮点击"""
+        try:
+            from PyQt6.QtWidgets import QInputDialog
+
+            # 获取文档标题
+            title, ok = QInputDialog.getText(
+                self,
+                "创建新文档",
+                "请输入文档标题:",
+                text="新文档"
+            )
+
+            if ok and title.strip():
+                # 通过信号通知主控制器创建文档
+                self._request_create_document(title.strip())
+
+        except Exception as e:
+            logger.error(f"创建文档请求失败: {e}")
+
+    def _on_create_template_clicked(self):
+        """使用模板按钮点击"""
+        try:
+            from PyQt6.QtWidgets import QInputDialog
+
+            # 模板选项
+            templates = [
+                "长篇小说模板",
+                "短篇小说模板",
+                "剧本模板",
+                "散文模板",
+                "诗歌模板"
+            ]
+
+            template, ok = QInputDialog.getItem(
+                self,
+                "选择模板",
+                "请选择要使用的模板:",
+                templates,
+                0,
+                False
+            )
+
+            if ok and template:
+                # 通过信号通知主控制器创建模板文档
+                self._request_create_template(template)
+
+        except Exception as e:
+            logger.error(f"创建模板请求失败: {e}")
+
+    def _request_create_document(self, title: str):
+        """请求创建文档"""
+        try:
+            # 尝试获取主控制器并创建文档
+            from src.shared.ioc.container import get_global_container
+            container = get_global_container()
+            if container:
+                from src.presentation.controllers.main_controller import MainController
+                main_controller = container.get(MainController)
+                if main_controller:
+                    # 使用主控制器的新建文档方法
+                    main_controller.new_document()
+                    logger.info(f"请求创建文档: {title}")
+                    return
+
+            logger.warning("无法获取主控制器，创建文档请求失败")
+
+        except Exception as e:
+            logger.error(f"请求创建文档失败: {e}")
+
+    def _request_create_template(self, template: str):
+        """请求创建模板文档"""
+        try:
+            # 这里可以扩展为更复杂的模板创建逻辑
+            logger.info(f"请求创建模板文档: {template}")
+            # 暂时使用创建普通文档的方式
+            self._request_create_document("模板文档")
+
+        except Exception as e:
+            logger.error(f"请求创建模板文档失败: {e}")
+
     def _setup_connections(self):
         """设置信号连接"""
         self.tab_widget.tabCloseRequested.connect(self._close_tab)
@@ -1292,16 +1470,27 @@ class EditorWidget(QWidget):
             # 清空文档标签页记录
             self._document_tabs.clear()
 
-            # 显示欢迎页面
+            # 显示欢迎页面（会根据当前项目状态显示不同内容）
             if self.tab_widget.count() == 0:
                 self._create_welcome_page()
 
-            logger.info("✅ 所有文档已关闭")
+            logger.info("✅ 所有文档已关闭，欢迎页面已刷新")
 
         except Exception as e:
             logger.error(f"❌ 关闭所有文档失败: {e}")
             import traceback
             logger.error(traceback.format_exc())
+
+    def refresh_welcome_page(self):
+        """刷新欢迎页面（在项目状态改变时调用）"""
+        try:
+            # 如果当前只有欢迎页面，则刷新它
+            if self.tab_widget.count() == 1 and self.tab_widget.tabText(0) == "欢迎":
+                self.tab_widget.clear()
+                self._create_welcome_page()
+                logger.info("欢迎页面已刷新")
+        except Exception as e:
+            logger.error(f"刷新欢迎页面失败: {e}")
 
     def _on_tab_changed(self, index: int):
         """标签页切换"""

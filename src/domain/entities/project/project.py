@@ -11,6 +11,9 @@ from datetime import datetime
 from typing import Optional, Dict, Any, List
 from pathlib import Path
 import uuid
+import logging
+
+logger = logging.getLogger(__name__)
 
 from .project_types import ProjectStatus, ProjectType, can_transition_status
 from .project_metadata import ProjectMetadata
@@ -363,8 +366,11 @@ class Project:
         # 安全处理组件
         try:
             metadata = ProjectMetadata.from_dict(data.get("metadata", {}))
-        except Exception:
-            metadata = ProjectMetadata()
+        except Exception as e:
+            logger.warning(f"创建项目元数据失败，使用默认值: {e}")
+            # 使用项目名称作为默认标题
+            project_title = data.get("name", "未命名项目")
+            metadata = ProjectMetadata(title=project_title)
 
         try:
             settings = ProjectSettings.from_dict(data.get("settings", {}))

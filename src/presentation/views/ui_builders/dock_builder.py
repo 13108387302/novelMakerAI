@@ -47,9 +47,13 @@ class DockBuilder(QObject):
         # 保存引用
         self.docks["project"] = project_dock
         main_window.project_dock = project_dock
-        
+        # 注册到主窗口的注册表
+        if hasattr(main_window, 'dock_registry'):
+            main_window.dock_registry["project"] = project_dock
+            main_window.view_registry["project_tree"] = project_tree_widget
+
         return project_dock
-        
+
     def create_ai_dock(self, main_window, ai_panel_widget) -> QDockWidget:
         """创建AI停靠窗口"""
         ai_dock = QDockWidget("AI助手", main_window)
@@ -73,9 +77,13 @@ class DockBuilder(QObject):
         # 保存引用
         self.docks["ai"] = ai_dock
         main_window.ai_dock = ai_dock
-        
+        # 注册到主窗口的注册表
+        if hasattr(main_window, 'dock_registry'):
+            main_window.dock_registry["ai"] = ai_dock
+            main_window.view_registry["global_ai_panel"] = ai_panel_widget
+
         return ai_dock
-        
+
     def create_status_dock(self, main_window, status_panel_widget) -> QDockWidget:
         """创建状态停靠窗口"""
         status_dock = QDockWidget("状态", main_window)
@@ -103,9 +111,13 @@ class DockBuilder(QObject):
         # 保存引用
         self.docks["status"] = status_dock
         main_window.status_dock = status_dock
+        # 注册到主窗口的注册表
+        if hasattr(main_window, 'dock_registry'):
+            main_window.dock_registry["status"] = status_dock
+            main_window.view_registry["status_panel"] = status_panel_widget
 
         return status_dock
-        
+
     def create_tabbed_right_dock(self, main_window, ai_panel_widget, document_ai_panel_widget) -> QTabWidget:
         """创建右侧标签页停靠窗口"""
         # 创建标签页容器
@@ -141,43 +153,66 @@ class DockBuilder(QObject):
         self.docks["right_tabs"] = right_dock
         main_window.right_dock = right_dock
         main_window.right_tabs = right_tabs
-        
+        # 注册到主窗口的注册表
+        if hasattr(main_window, 'dock_registry'):
+            main_window.dock_registry["right_tabs"] = right_dock
+            main_window.view_registry["right_tabs"] = right_tabs
+            main_window.view_registry["document_ai_container"] = document_ai_panel_widget
+
         return right_tabs
-        
+
     def create_output_dock(self, main_window) -> QDockWidget:
-        """创建输出停靠窗口"""
+        """创建输出停靠窗口（系统输出）"""
         from PyQt6.QtWidgets import QTextEdit
-        
-        # 创建输出文本框
+
         output_text = QTextEdit()
         output_text.setObjectName("output_text")
         output_text.setReadOnly(True)
         output_text.setPlaceholderText("系统输出信息将显示在这里...")
-        
-        # 创建停靠窗口
+
         output_dock = QDockWidget("输出", main_window)
         output_dock.setObjectName("output_dock")
         output_dock.setAllowedAreas(Qt.DockWidgetArea.BottomDockWidgetArea)
         output_dock.setWidget(output_text)
-        
-        # 默认隐藏
+
         output_dock.setVisible(False)
-        
-        # 连接可见性变化信号
         output_dock.visibilityChanged.connect(
             lambda visible: self.dock_visibility_changed.emit("output", visible)
         )
-        
-        # 添加到主窗口
         main_window.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, output_dock)
-        
-        # 保存引用
+
         self.docks["output"] = output_dock
         main_window.output_dock = output_dock
         main_window.output_text = output_text
-        
+        # 注册到主窗口的注册表
+        if hasattr(main_window, 'dock_registry'):
+            main_window.dock_registry["output"] = output_dock
+            main_window.view_registry["output_text"] = output_text
+
         return output_dock
-        
+
+    def create_ai_console_dock(self, main_window) -> QDockWidget:
+        """创建 AI 控制台停靠窗口（底部，默认隐藏）"""
+        from src.presentation.widgets.ai.refactored.components.ai_console_widget import AIConsoleWidget
+        ai_console = AIConsoleWidget()
+        ai_console_dock = QDockWidget("AI 控制台", main_window)
+        ai_console_dock.setObjectName("ai_console_dock")
+        ai_console_dock.setAllowedAreas(Qt.DockWidgetArea.BottomDockWidgetArea)
+        ai_console_dock.setWidget(ai_console)
+        ai_console_dock.setVisible(False)
+        ai_console_dock.visibilityChanged.connect(
+            lambda visible: self.dock_visibility_changed.emit("ai_console", visible)
+        )
+        main_window.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, ai_console_dock)
+        self.docks["ai_console"] = ai_console_dock
+        main_window.ai_console_dock = ai_console_dock
+        main_window.ai_console = ai_console
+        # 注册到主窗口的注册表
+        if hasattr(main_window, 'dock_registry'):
+            main_window.dock_registry["ai_console"] = ai_console_dock
+            main_window.view_registry["ai_console"] = ai_console
+        return ai_console_dock
+
     def get_dock(self, dock_name: str) -> QDockWidget:
         """获取停靠窗口"""
         return self.docks.get(dock_name)

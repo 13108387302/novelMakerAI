@@ -166,11 +166,11 @@ class DeepSeekClient(BaseAIClient):
             # 构建消息
             messages = self._build_messages(request)
             
-            # 获取模型参数
-            model = request.parameters.get('model', self.default_model)
+            # 获取模型参数（兼容显式传入None的情况，回落到默认模型）
+            model = request.parameters.get('model') or self.default_model
             max_tokens = request.parameters.get('max_tokens', self.max_tokens)
             temperature = request.parameters.get('temperature', self.temperature)
-            
+
             # 调用DeepSeek API
             response = await self.client.chat.completions.create(
                 model=model,
@@ -222,11 +222,11 @@ class DeepSeekClient(BaseAIClient):
             # 构建消息
             messages = self._build_messages(request)
             
-            # 获取模型参数
-            model = request.parameters.get('model', self.default_model)
+            # 获取模型参数（兼容显式传入None的情况，回落到默认模型）
+            model = request.parameters.get('model') or self.default_model
             max_tokens = request.parameters.get('max_tokens', self.max_tokens)
             temperature = request.parameters.get('temperature', self.temperature)
-            
+
             # 调用DeepSeek流式API
             stream = await self.client.chat.completions.create(
                 model=model,

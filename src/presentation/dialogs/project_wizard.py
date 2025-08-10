@@ -425,11 +425,19 @@ class ProjectWizard(QWizard):
                     padding: 8px;
                     font-size: 12px;
                     background-color: white;
+                    color: #333;
+                    selection-background-color: #4CAF50;
+                    selection-color: white;
                 }
 
                 QLineEdit:focus, QTextEdit:focus, QComboBox:focus, QSpinBox:focus {
                     border-color: #4CAF50;
                     outline: none;
+                    color: #111;
+                }
+
+                QLineEdit::placeholder, QTextEdit::placeholder {
+                    color: #999;
                 }
 
                 QCheckBox {

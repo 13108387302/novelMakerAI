@@ -183,6 +183,7 @@ class Container:
         with self._lock:
             descriptor = ServiceDescriptor(
                 service_type=service_type,
+                implementation_type=type(instance),  # 使用实例的类型作为实现类型
                 lifetime=LifetimeScope.SINGLETON,
                 instance=instance
             )
@@ -416,6 +417,13 @@ def set_global_container(container: Container) -> None:
     global _global_container
     with _container_lock:
         _global_container = container
+
+
+def get_global_container() -> Optional[Container]:
+    """获取全局容器实例"""
+    global _global_container
+    with _container_lock:
+        return _global_container
 
 
 def get_container() -> Optional[Container]:

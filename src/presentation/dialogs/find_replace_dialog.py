@@ -308,10 +308,18 @@ class FindReplaceDialog(QDialog):
                 border: 1px solid #d0d0d0;
                 border-radius: 3px;
                 background-color: white;
+                color: #333;
+                selection-background-color: #0078d4;
+                selection-color: white;
             }
 
             QLineEdit:focus {
                 border-color: #0078d4;
+                color: #111;
+            }
+
+            QLineEdit::placeholder {
+                color: #999;
             }
 
             QPushButton {

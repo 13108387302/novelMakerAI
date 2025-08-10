@@ -37,8 +37,20 @@ class ServiceRegistryFactory:
         self.container = container
         self.settings = settings
         self.event_bus = event_bus
-        self.data_dir = settings.data_dir
-        
+        # 尝试使用项目作用域数据目录，如果没有则使用默认目录
+        try:
+            from src.shared.project_context import ProjectPaths
+            project_paths: ProjectPaths = self.container.get(ProjectPaths)
+            self.data_dir = project_paths.data_dir
+        except ValueError:
+            # 项目路径还没有注册，使用默认数据目录
+            from pathlib import Path
+            import os
+            default_data_dir = Path(os.path.expanduser("~")) / "AppData" / "Local" / "AI_Novel_Editor"
+            default_data_dir.mkdir(parents=True, exist_ok=True)
+            self.data_dir = default_data_dir
+            logger.debug("使用默认数据目录（项目路径未注册）")
+
         logger.debug("服务注册工厂初始化完成")
     
     def register_singleton(self, interface: Type, factory: Callable[[], Any]) -> None:
@@ -74,27 +86,39 @@ class ServiceRegistryFactory:
 
     
     def register_repositories_batch(self) -> None:
-        """批量注册仓储服务"""
+        """批量注册仓储服务（使用项目内路径）"""
         from src.infrastructure.repositories.file_project_repository import FileProjectRepository
         from src.infrastructure.repositories.file_document_repository import FileDocumentRepository
-        # AIServiceRepository已被UnifiedAIClientManager替代
         from src.domain.repositories.project_repository import IProjectRepository
         from src.domain.repositories.document_repository import IDocumentRepository
         from src.domain.repositories.ai_service_repository import IAIServiceRepository
-        
-        # 注册项目仓储
-        self.register_repository(IProjectRepository, FileProjectRepository, DIR_PROJECTS)
-        
-        # 注册文档仓储
-        self.register_repository(IDocumentRepository, FileDocumentRepository, DIR_DOCUMENTS)
-        
-        # 注册统一AI客户端管理器（替代AIServiceRepository）
-        from src.infrastructure.ai.unified_ai_client_manager import get_unified_ai_client_manager
+        from src.shared.project_context import ProjectPaths
+
+        project_paths: ProjectPaths = self.container.get(ProjectPaths)
+
+        # 注册项目仓储（使用项目内data目录）
+        self.container.register_singleton(
+            IProjectRepository,
+            lambda: FileProjectRepository(project_paths.data_dir / "projects")
+        )
+
+        # 注册文档仓储（使用项目内documents目录）
+        self.container.register_singleton(
+            IDocumentRepository,
+            lambda: FileDocumentRepository(project_paths.documents_dir)
+        )
+
+        # 注册AI仓储接口适配到新编排服务（替代直接绑定客户端管理器）
+        from src.application.services.ai.core.ai_orchestration_service import AIOrchestrationService
+        from src.infrastructure.ai.adapters.ai_service_repository_adapter import AIServiceRepositoryAdapter
+        def _create_ai_repository_adapter():
+            orchestration: AIOrchestrationService = self.container.get(AIOrchestrationService)
+            return AIServiceRepositoryAdapter(orchestration)
         self.register_singleton(
             IAIServiceRepository,
-            get_unified_ai_client_manager
+            _create_ai_repository_adapter
         )
-        
+
         logger.info("批量注册仓储服务完成")
     
     def register_core_services_batch(self) -> None:
@@ -103,6 +127,7 @@ class ServiceRegistryFactory:
         from src.application.services.project_service import ProjectService
         from src.application.services.document_service import DocumentService
         from src.application.services.search import SearchService
+        from src.application.services.ai.core.ai_orchestration_service import AIOrchestrationService
         from src.domain.repositories.project_repository import IProjectRepository
         from src.domain.repositories.document_repository import IDocumentRepository
         
@@ -220,7 +245,8 @@ class ServiceRegistryFactory:
         self.register_singleton(AIOrchestrationService, create_ai_orchestration_service)
         self.register_singleton(AIIntelligenceService, create_ai_intelligence_service)
 
-        # 为向后兼容，也注册一个AIService别名
+        # 为向后兼容，也注册一个AIService别名（供插件/旧代码获取）
+        self.register_singleton('ai_service', create_ai_orchestration_service)
         self.register_singleton('AIService', create_ai_orchestration_service)
 
         logger.info("注册新AI架构服务完成")
@@ -243,16 +269,33 @@ class ServiceRegistryFactory:
     def _build_ai_config(self, settings_service) -> dict:
         """构建AI服务配置"""
         from src.shared.constants import ASYNC_MEDIUM_TIMEOUT
-        
+
+        def _sanitize_api_key(raw):
+            try:
+                if not raw or not isinstance(raw, str):
+                    return ''
+                s = raw.strip()
+                # 过滤明显的日志串/中文提示等异常值
+                if 'WARNING' in s or 'AI设置不可用' in s or '错误' in s or '|' in s:
+                    return ''
+                # 若包含非ASCII字符，视为无效，避免客户端底层编码异常
+                try:
+                    s.encode('ascii')
+                except UnicodeEncodeError:
+                    return ''
+                return s
+            except Exception:
+                return ''
+
         return {
             'providers': {
                 'openai': {
-                    'api_key': settings_service.get_setting('ai.openai_api_key', ''),
+                    'api_key': _sanitize_api_key(settings_service.get_setting('ai.openai_api_key', '')),
                     'base_url': settings_service.get_setting('ai.openai_base_url', 'https://api.openai.com/v1'),
                     'default_model': settings_service.get_setting('ai.openai_model', 'gpt-3.5-turbo')
                 },
                 'deepseek': {
-                    'api_key': settings_service.get_setting('ai.deepseek_api_key', ''),
+                    'api_key': _sanitize_api_key(settings_service.get_setting('ai.deepseek_api_key', '')),
                     'base_url': settings_service.get_setting('ai.deepseek_base_url', 'https://api.deepseek.com/v1'),
                     'default_model': settings_service.get_setting('ai.deepseek_model', 'deepseek-chat')
                 }

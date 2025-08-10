@@ -15,8 +15,10 @@ from typing import Dict, Any, Optional, List, Callable
 from dataclasses import dataclass
 from datetime import datetime
 from threading import Lock
+from PyQt6.QtCore import QTimer
 
-from .deep_context_analyzer import DeepContextAnalyzer, WritingContext
+from .deep_context_analyzer import WritingContext
+from .singleton import get_deep_context_analyzer
 from src.shared.events.event_bus import EventBus
 
 logger = logging.getLogger(__name__)
@@ -52,8 +54,8 @@ class DocumentContextManager:
     
     def __init__(self, event_bus: Optional[EventBus] = None):
         self.event_bus = event_bus
-        self.context_analyzer = DeepContextAnalyzer()
-        
+        self.context_analyzer = get_deep_context_analyzer()
+
         # 文档上下文缓存
         self._document_contexts: Dict[str, DocumentContextInfo] = {}
         self._context_lock = Lock()
@@ -224,16 +226,20 @@ class DocumentContextManager:
                 logger.debug(f"文档上下文已清除: {document_id}")
     
     def _analyze_context_async(self, document_id: str) -> None:
-        """异步分析上下文"""
+        """异步分析上下文（分析在后台执行，UI更新通过主线程信号）"""
         import threading
-        
+
         def analyze():
             try:
+                # 仅做纯计算或数据更新
                 self.analyze_document_context(document_id)
                 self.generate_writing_suggestions(document_id)
+                # 通知组件更新必须在主线程
+                from src.shared.utils.async_manager import get_async_manager
+                get_async_manager().callback_signal.emit(lambda: self._notify_ai_components(document_id))
             except Exception as e:
                 logger.error(f"异步上下文分析失败: {e}")
-        
+
         thread = threading.Thread(target=analyze, daemon=True)
         thread.start()
     
