@@ -1116,8 +1116,13 @@ class MainController(QObject):
                     file_path, "", ImportOptions()
                 )
                 if result.success:
-                    # 假设导入时返回了项目目录或已创建项目，尝试使用返回路径或父目录
-                    project_dir = Path(result.success.root_path) if hasattr(result.success, 'root_path') and result.success.root_path else file_path.parent
+                    # 使用导入结果中的项目路径或项目对象
+                    if hasattr(result, 'project_path') and result.project_path:
+                        project_dir = Path(result.project_path)
+                    elif hasattr(result, 'project') and result.project and getattr(result.project, 'root_path', None):
+                        project_dir = Path(result.project.root_path)
+                    else:
+                        project_dir = file_path.parent
                     await self.project_controller.open_project_by_path(project_dir)
                 else:
                     self._show_error("打开项目失败", f"无法导入项目文件: {file_path}")
@@ -1363,14 +1368,13 @@ class MainController(QObject):
             if not current_project:
                 return
 
-            # 创建项目副本
-            new_project = Project(
-                title=current_project.title + "_副本",
-                description=current_project.description,
-                project_type=current_project.project_type,
-                status=current_project.status,
-                metadata=current_project.metadata
-            )
+            # 创建项目副本（使用实体自带的copy，再调整标题/描述）
+            new_project = current_project.copy()
+            new_project.title = f"{current_project.title}_副本"
+            try:
+                new_project.description = current_project.description
+            except Exception:
+                pass
 
             # 保存新项目
             success = await self.project_service.save_project_as(new_project, file_path)
@@ -1499,7 +1503,7 @@ class MainController(QObject):
             # 使用当前工作目录作为默认路径
             default_path = Path.cwd()
 
-            file_path, _ = QFileDialog.getSaveFileName(
+            file_path, selected_filter = QFileDialog.getSaveFileName(
                 self._main_window,
                 "导出项目",
                 str(default_path / f"{self.project_service.current_project.title}.zip"),
@@ -1507,9 +1511,25 @@ class MainController(QObject):
             )
 
             if file_path:
+                # 若未包含扩展名，依据选择的过滤器补全扩展名
+                p = Path(file_path)
+                suffix = p.suffix.lower()
+                if not suffix:
+                    try:
+                        if selected_filter and "*.zip" in selected_filter:
+                            p = p.with_suffix(".zip")
+                        elif selected_filter and "*.json" in selected_filter:
+                            p = p.with_suffix(".json")
+                        elif selected_filter and "*.txt" in selected_filter:
+                            p = p.with_suffix(".txt")
+                    except Exception:
+                        pass
+
+                fixed_path = p
+
                 QTimer.singleShot(0, lambda: self._run_async_task(
-                    self._export_project_async(Path(file_path)),
-                    success_callback=lambda _: logger.info(f"项目导出成功: {file_path}"),
+                    self._export_project_async(fixed_path),
+                    success_callback=lambda _: self._on_export_task_done(fixed_path),
                     error_callback=lambda e: self._show_error("导出项目失败", str(e))
                 ))
 
@@ -1533,15 +1553,43 @@ class MainController(QObject):
             )
 
             if result.success:
+                # 校验文件是否真实存在
+                try:
+                    out_path = result.output_path if hasattr(result, 'output_path') and result.output_path else file_path
+                    out_path = Path(out_path) if not isinstance(out_path, Path) else out_path
+                    if out_path.exists():
+                        try:
+                            size = out_path.stat().st_size
+                        except Exception:
+                            size = -1
+                        logger.info(f"项目导出成功: {out_path} (大小: {size} bytes)")
+                        # 可选：提示到状态栏
+                        self.status_message.emit(f"项目导出成功: {out_path}")
+                    else:
+                        logger.error(f"导出结果为成功，但未找到文件: {out_path}")
+                        self._show_error("导出失败", f"导出文件未找到：{out_path}")
+                except Exception as e_check:
+                    logger.warning(f"导出后检查文件存在性失败: {e_check}")
                 # 状态消息由 ProjectController 发送，避免重复
-                pass
             else:
                 error_msg = "; ".join(result.errors) if result.errors else "未知错误"
+                logger.error(f"导出失败: id={project.id}, 格式={export_format}, 输出={file_path}, 错误={error_msg}")
                 self._show_error("导出失败", error_msg)
+
 
         except Exception as e:
             logger.error(f"异步导出项目失败: {e}")
             self._show_error("导出失败", str(e))
+
+    def _on_export_task_done(self, out_path: Path) -> None:
+        """导出任务完成回调：补充存在性与大小日志"""
+        try:
+            p = Path(out_path)
+            exists = p.exists()
+            size = p.stat().st_size if exists else -1
+            logger.info(f"项目导出任务完成: {p} | 存在: {exists} | 大小: {size if exists else 'N/A'}")
+        except Exception as e:
+            logger.warning(f"导出完成回调检查文件失败: {e}")
 
     # ========================================================================
     # 文档管理
@@ -2118,10 +2166,10 @@ class MainController(QObject):
                 from src.presentation.dialogs.backup_manager_dialog import BackupManagerDialog
                 from src.application.services.backup_service import BackupService
 
-                # 创建备份服务
+                # 创建备份服务（从服务中获取仓储实例）
                 backup_service = BackupService(
-                    project_repository=self.project_repository,
-                    document_repository=self.document_repository,
+                    project_repository=self.project_service.project_repository,
+                    document_repository=self.document_service.document_repository,
                     backup_dir=Path.home() / "AI小说编辑器" / "backups"
                 )
 

@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
     QLabel, QToolBar, QFrame, QSplitter, QPushButton
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
-from PyQt6.QtGui import QFont, QTextCursor, QAction
+from PyQt6.QtGui import QFont, QTextCursor, QTextDocument, QAction
 
 from src.domain.entities.document import Document, DocumentType
 from src.presentation.widgets.syntax_highlighter import NovelSyntaxHighlighter, MarkdownSyntaxHighlighter
@@ -897,13 +897,15 @@ class DocumentTab(QWidget):
     
     def find_text(self, text: str, case_sensitive: bool = False, whole_word: bool = False, backward: bool = False) -> bool:
         """查找文本"""
-        flags = QTextCursor.FindFlag(0)
+        # PyQt6 使用 QTextDocument.FindFlag
+        from PyQt6.QtGui import QTextDocument
+        flags = QTextDocument.FindFlag(0)
         if case_sensitive:
-            flags |= QTextCursor.FindFlag.FindCaseSensitively
+            flags |= QTextDocument.FindFlag.FindCaseSensitively
         if whole_word:
-            flags |= QTextCursor.FindFlag.FindWholeWords
+            flags |= QTextDocument.FindFlag.FindWholeWords
         if backward:
-            flags |= QTextCursor.FindFlag.FindBackward
+            flags |= QTextDocument.FindFlag.FindBackward
 
         return self.text_edit.find(text, flags)
 
@@ -922,11 +924,13 @@ class DocumentTab(QWidget):
         cursor.movePosition(QTextCursor.MoveOperation.Start)
         self.text_edit.setTextCursor(cursor)
 
-        flags = QTextCursor.FindFlag(0)
+        # PyQt6 使用 QTextDocument.FindFlag
+        from PyQt6.QtGui import QTextDocument
+        flags = QTextDocument.FindFlag(0)
         if case_sensitive:
-            flags |= QTextCursor.FindFlag.FindCaseSensitively
+            flags |= QTextDocument.FindFlag.FindCaseSensitively
         if whole_word:
-            flags |= QTextCursor.FindFlag.FindWholeWords
+            flags |= QTextDocument.FindFlag.FindWholeWords
 
         while self.text_edit.find(find_text, flags):
             cursor = self.text_edit.textCursor()

@@ -73,8 +73,8 @@ class TextFormatHandler(BaseFormatHandler):
             # 获取并添加文档内容
             if options.include_documents:
                 try:
-                    documents = await self.service.document_repository.get_by_project_id(project.id)
-                    
+                    documents = await self.service.document_repository.list_by_project(project.id)
+
                     if documents:
                         content_parts.append("文档内容:")
                         content_parts.append("-" * 30)
@@ -108,10 +108,7 @@ class TextFormatHandler(BaseFormatHandler):
             # 写入文件
             final_content = "\n".join(content_parts)
             # 统一原子写入
-            from src.shared.utils.file_operations import get_file_operations
-            return await get_file_operations("import_export").save_text_atomic(
-                output_path, final_content, create_backup=True
-            )
+            return await self._write_file_content(output_path, final_content, options.output_encoding)
 
         except Exception as e:
             logger.error(f"导出文本失败: {e}")
@@ -125,10 +122,8 @@ class TextFormatHandler(BaseFormatHandler):
                 logger.error(f"不支持的文件格式: {input_path.suffix}")
                 return None
 
-            # 读取文件内容
-            # 统一读取（带编码回退）
-            from src.shared.utils.file_operations import get_file_operations
-            content = await get_file_operations("import_export").load_text_safe(input_path)
+            # 读取文件内容（带编码回退）
+            content = await self._read_file_content(input_path, options.import_encoding)
             if not content:
                 logger.error("无法读取文件内容")
                 return None
@@ -145,27 +140,36 @@ class TextFormatHandler(BaseFormatHandler):
                 else:
                     project_name = first_line
             
-            # 创建项目
+            # 创建项目对象
             project = Project(
-                id="",  # 将由仓储分配
                 name=project_name,
                 description=f"从文本文件导入: {input_path.name}"
             )
-            
+
+            # 计算项目根目录并创建结构
+            from src.shared.project_context import ProjectPaths, ensure_project_dirs
+            project_dir = input_path.parent / project_name
+            paths = ProjectPaths(project_dir)
+            ensure_project_dirs(paths)
+            project.root_path = project_dir
+            await self.service.project_repository.save(project)
+
             # 创建单个文档包含所有内容
             document = Document(
-                id="",  # 将由仓储分配
+                document_type=DocumentType.CHAPTER,
                 title=f"{project_name} - 内容",
                 content=content,
-                type=DocumentType.CHAPTER
+                project_id=project.id
             )
-            
-            # 保存文档
-            await self.service.document_repository.save(document)
-            
+
+            # 使用项目作用域的文档仓储保存到正确目录
+            from src.infrastructure.repositories.file_document_repository import FileDocumentRepository
+            doc_repo = FileDocumentRepository(paths.documents_dir)
+            await doc_repo.save(document)
+
             logger.info(f"项目已从文本导入: {project.name}")
             return project
-            
+
         except Exception as e:
             logger.error(f"从文本导入项目失败: {e}")
             return None
@@ -191,10 +195,7 @@ class TextFormatHandler(BaseFormatHandler):
             
             # 写入文件
             final_content = "\n".join(content_parts)
-            from src.shared.utils.file_operations import get_file_operations
-            return await get_file_operations("import_export").save_text_atomic(
-                output_path, final_content, create_backup=True
-            )
+            return await self._write_file_content(output_path, final_content, options.output_encoding)
 
         except Exception as e:
             logger.error(f"导出文档为文本失败: {e}")
@@ -209,8 +210,7 @@ class TextFormatHandler(BaseFormatHandler):
                 return None
 
             # 读取文件内容
-            from src.shared.utils.file_operations import get_file_operations
-            content = await get_file_operations("import_export").load_text_safe(input_path)
+            content = await self._read_file_content(input_path, options.import_encoding)
             if not content:
                 logger.error("无法读取文件内容")
                 return None
@@ -328,8 +328,8 @@ class MarkdownFormatHandler(BaseFormatHandler):
             
             # 写入文件
             final_content = "\n".join(content_parts)
-            return self._write_file_content(output_path, final_content, options.output_encoding)
-            
+            return await self._write_file_content(output_path, final_content, options.output_encoding)
+
         except Exception as e:
             logger.error(f"导出Markdown失败: {e}")
             return False
@@ -343,7 +343,7 @@ class MarkdownFormatHandler(BaseFormatHandler):
                 return None
 
             # 读取文件内容
-            content = self._read_file_content(input_path, options.import_encoding)
+            content = await self._read_file_content(input_path, options.import_encoding)
             if not content:
                 logger.error("无法读取文件内容")
                 return None
@@ -358,27 +358,35 @@ class MarkdownFormatHandler(BaseFormatHandler):
                     project_name = line.strip()[2:].strip()
                     break
             
-            # 创建项目
+            # 创建项目对象
             project = Project(
-                id="",
                 name=project_name,
                 description=f"从Markdown文件导入: {input_path.name}"
             )
-            
+
+            # 计算项目根目录并创建结构
+            from src.shared.project_context import ProjectPaths, ensure_project_dirs
+            project_dir = input_path.parent / project_name
+            paths = ProjectPaths(project_dir)
+            ensure_project_dirs(paths)
+            project.root_path = project_dir
+            await self.service.project_repository.save(project)
+
             # 创建文档包含内容
             document = Document(
-                id="",
+                document_type=DocumentType.CHAPTER,
                 title=f"{project_name} - 内容",
                 content=content,
-                type=DocumentType.CHAPTER
+                project_id=project.id
             )
-            
-            # 保存文档
-            await self.service.document_repository.save(document)
-            
+
+            from src.infrastructure.repositories.file_document_repository import FileDocumentRepository
+            doc_repo = FileDocumentRepository(paths.documents_dir)
+            await doc_repo.save(document)
+
             logger.info(f"项目已从Markdown导入: {project.name}")
             return project
-            
+
         except Exception as e:
             logger.error(f"从Markdown导入项目失败: {e}")
             return None
@@ -407,8 +415,8 @@ class MarkdownFormatHandler(BaseFormatHandler):
             
             # 写入文件
             final_content = "\n".join(content_parts)
-            return self._write_file_content(output_path, final_content, options.output_encoding)
-            
+            return await self._write_file_content(output_path, final_content, options.output_encoding)
+
         except Exception as e:
             logger.error(f"导出文档为Markdown失败: {e}")
             return False
@@ -422,7 +430,7 @@ class MarkdownFormatHandler(BaseFormatHandler):
                 return None
 
             # 读取文件内容
-            content = self._read_file_content(input_path, options.import_encoding)
+            content = await self._read_file_content(input_path, options.import_encoding)
             if not content:
                 logger.error("无法读取文件内容")
                 return None
@@ -439,12 +447,11 @@ class MarkdownFormatHandler(BaseFormatHandler):
             
             # 创建文档
             document = Document(
-                id="",
+                document_type=DocumentType.CHAPTER,
                 title=title,
-                content=content.strip(),
-                type=DocumentType.CHAPTER
+                content=content.strip()
             )
-            
+
             logger.info(f"文档已从Markdown导入: {document.title}")
             return document
             

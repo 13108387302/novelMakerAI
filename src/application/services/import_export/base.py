@@ -92,6 +92,10 @@ class ImportResult:
     warnings: List[str] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
     import_time: float = 0.0
+    # 附加信息（用于后续流程）
+    project: Optional[Project] = None
+    document: Optional[Document] = None
+    project_path: Optional[str] = None
 
 
 class IFormatHandler(ABC):
@@ -211,22 +215,25 @@ class BaseFormatHandler(IFormatHandler):
                 
             # 确保输出目录存在
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            
+
             # 调用具体的导出实现
             success = await self._do_export_project(project, output_path, options)
-            
+
             if success:
-                result.success = True
-                result.output_path = output_path
-                result.exported_items.append(f"项目: {project.name}")
-                
-                # 计算文件大小
+                # 二次校验：处理器报告成功，但文件未生成时视为失败并给出明确错误
                 if output_path.exists():
-                    result.file_size = output_path.stat().st_size
-                    
+                    result.success = True
+                    result.output_path = output_path
+                    result.exported_items.append(f"项目: {project.name}")
+                    try:
+                        result.file_size = output_path.stat().st_size
+                    except Exception:
+                        result.file_size = 0
+                else:
+                    result.errors.append("处理器报告成功但未生成文件")
             else:
                 result.errors.append("导出失败")
-                
+
         except Exception as e:
             self.logger.error(f"导出项目失败: {e}")
             result.errors.append(str(e))
@@ -249,13 +256,21 @@ class BaseFormatHandler(IFormatHandler):
                 
             # 调用具体的导入实现
             project = await self._do_import_project(input_path, options)
-            
+
             if project:
                 result.success = True
-                result.imported_items.append(f"项目: {project.name}")
+                # 记录关键结果字段，供控制器层使用
+                result.project = project
+                if hasattr(project, 'id') and project.id:
+                    result.imported_items.append(project.id)
+                else:
+                    result.imported_items.append(project.name or "")
+                # 附带项目路径（若可用）
+                if hasattr(project, 'root_path') and project.root_path:
+                    result.project_path = str(project.root_path)
             else:
                 result.errors.append("导入失败")
-                
+
         except Exception as e:
             self.logger.error(f"导入项目失败: {e}")
             result.errors.append(str(e))
@@ -320,13 +335,17 @@ class BaseFormatHandler(IFormatHandler):
                 
             # 调用具体的导入实现
             document = await self._do_import_document(input_path, options)
-            
+
             if document:
                 result.success = True
-                result.imported_items.append(f"文档: {document.title}")
+                result.document = document
+                if hasattr(document, 'id') and document.id:
+                    result.imported_items.append(document.id)
+                else:
+                    result.imported_items.append(document.title or "")
             else:
                 result.errors.append("导入失败")
-                
+
         except Exception as e:
             self.logger.error(f"导入文档失败: {e}")
             result.errors.append(str(e))
@@ -371,27 +390,23 @@ class BaseFormatHandler(IFormatHandler):
             self.logger.error(f"创建目录失败: {e}")
             return False
 
-    def _read_file_content(self, file_path: Path, encoding: str = "utf-8") -> Optional[str]:
-        """读取文件内容（统一实现）"""
+    async def _read_file_content(self, file_path: Path, encoding: str = "utf-8") -> Optional[str]:
+        """读取文件内容（统一实现，异步）"""
         try:
             from src.shared.utils.file_operations import get_file_operations
             ops = get_file_operations("import_export")
-            # 优先安全读取（带编码回退）
-            import asyncio
-            loop = asyncio.get_event_loop()
-            return loop.run_until_complete(ops.load_text_safe(file_path))
+            # 异步安全读取（带编码回退）
+            return await ops.load_text_safe(file_path)
         except Exception as e:
             self.logger.error(f"读取文件失败: {e}")
             return None
 
-    def _write_file_content(self, file_path: Path, content: str, encoding: str = "utf-8") -> bool:
-        """写入文件内容（统一原子写入）"""
+    async def _write_file_content(self, file_path: Path, content: str, encoding: str = "utf-8") -> bool:
+        """写入文件内容（统一原子写入，异步）"""
         try:
             from src.shared.utils.file_operations import get_file_operations
             ops = get_file_operations("import_export")
-            import asyncio
-            loop = asyncio.get_event_loop()
-            return loop.run_until_complete(ops.save_text_atomic(file_path, content, create_backup=True))
+            return await ops.save_text_atomic(file_path, content, create_backup=True)
         except Exception as e:
             self.logger.error(f"写入文件失败: {e}")
             return False

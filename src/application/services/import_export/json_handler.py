@@ -70,39 +70,62 @@ class JsonFormatHandler(BaseFormatHandler):
                 }
             }
 
-            # 添加项目设置
+            # 添加项目设置（确保可序列化）
             if options.include_settings and hasattr(project, 'settings'):
-                project_data["project"]["settings"] = project.settings
+                try:
+                    if hasattr(project.settings, "to_dict"):
+                        project_data["project"]["settings"] = project.settings.to_dict()  # type: ignore[attr-defined]
+                    else:
+                        project_data["project"]["settings"] = dict(getattr(project, 'settings').__dict__)
+                except Exception:
+                    project_data["project"]["settings"] = {}
 
-            # 添加统计信息
+            # 添加统计信息（确保可序列化）
             if options.include_statistics and hasattr(project, 'statistics'):
-                project_data["project"]["statistics"] = project.statistics
+                try:
+                    if hasattr(project.statistics, "to_dict"):
+                        project_data["project"]["statistics"] = project.statistics.to_dict()  # type: ignore[attr-defined]
+                    else:
+                        project_data["project"]["statistics"] = dict(getattr(project, 'statistics').__dict__)
+                except Exception:
+                    project_data["project"]["statistics"] = {}
 
             # 获取并添加文档
             if options.include_documents:
                 documents_data = []
                 try:
                     # 从服务获取项目文档
-                    documents = await self.service.document_repository.get_by_project_id(project.id)
-                    
+                    documents = await self.service.document_repository.list_by_project(project.id)
+
                     for doc in documents:
                         doc_data = {
                             "id": doc.id,
-                            "title": doc.title,
-                            "content": doc.content,
-                            "type": doc.type.value if hasattr(doc.type, 'value') else str(doc.type),
+                            "title": getattr(doc, "title", ""),
+                            "content": getattr(doc, "content", ""),
+                            "type": doc.type.value if hasattr(doc.type, 'value') else str(getattr(doc, 'type', '')),
                             "created_at": doc.created_at.isoformat() if hasattr(doc, 'created_at') else None,
                             "updated_at": doc.updated_at.isoformat() if hasattr(doc, 'updated_at') else None,
                         }
-                        
-                        # 添加文档元数据
-                        if hasattr(doc, 'metadata') and doc.metadata:
-                            doc_data["metadata"] = doc.metadata
-                            
+
+                        # 添加文档元数据（确保可序列化）
+                        try:
+                            md = getattr(doc, 'metadata', None)
+                            if md:
+                                doc_data["metadata"] = {
+                                    "title": getattr(md, "title", ""),
+                                    "description": getattr(md, "description", ""),
+                                    "tags": list(getattr(md, "tags", []) or []),
+                                    "author": getattr(md, "author", ""),
+                                    "created_at": md.created_at.isoformat() if hasattr(md, 'created_at') else None,
+                                    "updated_at": md.updated_at.isoformat() if hasattr(md, 'updated_at') else None,
+                                }
+                        except Exception:
+                            pass
+
                         documents_data.append(doc_data)
-                        
+
                     project_data["documents"] = documents_data
-                    
+
                 except Exception as e:
                     logger.warning(f"获取项目文档失败: {e}")
                     project_data["documents"] = []
@@ -116,11 +139,13 @@ class JsonFormatHandler(BaseFormatHandler):
                     logger.warning(f"获取角色信息失败: {e}")
                     project_data["characters"] = []
 
-            # 写入JSON文件（统一原子写入）
+            # 写入JSON文件（统一原子写入，并检查返回值）
             from src.shared.utils.file_operations import get_file_operations
-            await get_file_operations("import_export").save_json_atomic(
-                output_path, project_data, create_backup=True
-            )
+            ops = get_file_operations("import_export")
+            ok = await ops.save_json_atomic(output_path, project_data, create_backup=True)
+            if not ok:
+                logger.error(f"写入JSON失败（文件未保存）: {output_path}")
+                return False
 
             logger.info(f"项目已导出为JSON: {output_path}")
             return True
@@ -139,9 +164,7 @@ class JsonFormatHandler(BaseFormatHandler):
 
             # 读取JSON文件（统一读取+缓存）
             from src.shared.utils.file_operations import get_file_operations
-            data = await get_file_operations("import_export").load_json_cached(
-                input_path
-            )
+            data = await get_file_operations("import_export").load_json_cached(input_path)
             if data is None:
                 return None
 
@@ -153,21 +176,37 @@ class JsonFormatHandler(BaseFormatHandler):
             # 提取项目信息
             project_data = data.get("project", {})
             
-            # 创建项目对象
+            # 创建项目对象（尽量避免直接使用传入ID，除非用户要求保留）
             project = Project(
-                id=project_data.get("id", ""),
                 name=project_data.get("name", "导入的项目"),
                 description=project_data.get("description", "")
             )
+            if options.preserve_ids and project_data.get("id"):
+                project.id = str(project_data.get("id"))
 
-            # 设置项目属性
+            # 设置并持久化项目根路径（与输入文件同目录/同名子目录）
+            from src.shared.project_context import ProjectPaths, ensure_project_dirs
+            project_dir = input_path.parent / (project_data.get("name") or project.name)
+            paths = ProjectPaths(project_dir)
+            ensure_project_dirs(paths)
+            project.root_path = project_dir
+            await self.service.project_repository.save(project)
+
+            # 设置项目属性（如存在，确保类型正确）
             if "settings" in project_data:
-                project.settings = project_data["settings"]
-
+                try:
+                    from src.domain.entities.project import ProjectSettings
+                    project.settings = ProjectSettings.from_dict(project_data["settings"]) if isinstance(project_data["settings"], dict) else project.settings
+                except Exception:
+                    pass
             if "statistics" in project_data:
-                project.statistics = project_data["statistics"]
+                try:
+                    from src.domain.entities.project import ProjectStatistics
+                    project.statistics = ProjectStatistics.from_dict(project_data["statistics"]) if isinstance(project_data["statistics"], dict) else project.statistics
+                except Exception:
+                    pass
 
-            # 导入文档
+            # 导入文档（保存到项目作用域目录）
             if "documents" in data and data["documents"]:
                 await self._import_documents_from_json(project, data["documents"], options)
 
@@ -209,9 +248,7 @@ class JsonFormatHandler(BaseFormatHandler):
 
             # 写入JSON文件（统一原子写入）
             from src.shared.utils.file_operations import get_file_operations
-            await get_file_operations("import_export").save_json_atomic(
-                output_path, doc_data, create_backup=True
-            )
+            await get_file_operations("import_export").save_json_atomic(output_path, doc_data, create_backup=True)
 
             logger.info(f"文档已导出为JSON: {output_path}")
             return True
@@ -230,21 +267,20 @@ class JsonFormatHandler(BaseFormatHandler):
 
             # 读取JSON文件（统一读取+缓存）
             from src.shared.utils.file_operations import get_file_operations
-            data = await get_file_operations("import_export").load_json_cached(
-                input_path
-            )
+            data = await get_file_operations("import_export").load_json_cached(input_path)
             if data is None:
                 return None
 
             # 提取文档信息
             doc_data = data.get("document", {})
             
-            # 创建文档对象
+            # 创建文档对象（适配新的Document构造函数）
             document = Document(
-                id=doc_data.get("id", ""),
+                document_id=doc_data.get("id", None),
+                document_type=DocumentType(doc_data.get("type", "chapter")),
                 title=doc_data.get("title", "导入的文档"),
                 content=doc_data.get("content", ""),
-                type=DocumentType(doc_data.get("type", "chapter"))
+                project_id=project_data.get("id") if 'project_data' in locals() else None
             )
 
             # 设置文档元数据
@@ -280,10 +316,11 @@ class JsonFormatHandler(BaseFormatHandler):
         try:
             for doc_data in documents_data:
                 document = Document(
-                    id=doc_data.get("id", ""),
+                    document_id=doc_data.get("id", None),
+                    document_type=DocumentType(doc_data.get("type", "chapter")),
                     title=doc_data.get("title", "未命名文档"),
                     content=doc_data.get("content", ""),
-                    type=DocumentType(doc_data.get("type", "chapter"))
+                    project_id=getattr(project, 'id', None)
                 )
 
                 # 设置文档元数据
@@ -291,7 +328,13 @@ class JsonFormatHandler(BaseFormatHandler):
                     document.metadata = doc_data["metadata"]
 
                 # 保存文档到仓储
-                await self.service.document_repository.save(document)
+                # 保存到项目作用域文档目录
+                from src.shared.project_context import ProjectPaths
+                from src.infrastructure.repositories.file_document_repository import FileDocumentRepository
+                proj_root = getattr(project, 'root_path', None)
+                base = ProjectPaths(Path(proj_root)).documents_dir if proj_root else (Path.cwd() / 'content' / 'documents')
+                doc_repo = FileDocumentRepository(base)
+                await doc_repo.save(document)
 
         except Exception as e:
             logger.error(f"导入文档失败: {e}")

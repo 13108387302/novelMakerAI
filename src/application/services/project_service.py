@@ -454,15 +454,24 @@ class ProjectService(BaseService):
     async def save_project_as(self, project: Project, file_path: Path) -> bool:
         """另存为项目"""
         try:
-            # 设置项目路径
-            project.file_path = file_path
+            # 设置项目根目录（兼容仓储按 root_path 保存 project.json 的实现）
+            try:
+                from pathlib import Path
+                target = Path(file_path)
+                # 允许用户选择的是project.json或目录；统一成目录
+                if target.suffix.lower() == ".json":
+                    target_dir = target.parent
+                else:
+                    target_dir = target
+                project.root_path = target_dir
+            except Exception:
+                project.root_path = None
 
             # 保存项目
-            success = await self.project_repository.save(project)
-            if success:
+            saved = await self.project_repository.save(project)
+            if saved:
                 logger.info(f"项目另存为成功: {project.title} -> {file_path}")
 
-                # 发布项目保存事件
                 # 发布项目保存事件
                 event = ProjectSavedEvent(
                     project_id=project.id,

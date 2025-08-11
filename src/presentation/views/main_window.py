@@ -295,8 +295,7 @@ class MainWindow(QMainWindow):
             self.editor_widget.content_changed.connect(self._on_content_changed)
         if hasattr(self.editor_widget, 'cursor_position_changed'):
             self.editor_widget.cursor_position_changed.connect(self._update_cursor_position)
-            # 同步到文档AI面板用于局部上下文提取
-            # 旧文档AI面板的光标同步已移除        if hasattr(self.editor_widget, 'selection_changed'):
+        if hasattr(self.editor_widget, 'selection_changed'):
             self.editor_widget.selection_changed.connect(self._on_selection_changed)
         if hasattr(self.editor_widget, 'document_switched'):
             self.editor_widget.document_switched.connect(self._on_document_switched)
@@ -472,7 +471,7 @@ class MainWindow(QMainWindow):
 
             # 工具菜单
             elif action_name == "word_count":
-                self.controller.word_count()
+                self.controller.show_word_count()
             elif action_name == "backup_management":
                 self.controller.backup_management()
             elif action_name == "settings":

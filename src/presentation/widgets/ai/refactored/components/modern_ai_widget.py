@@ -673,11 +673,6 @@ class ModernAIWidget(QWidget):
             logger = logging.getLogger(__name__)
             logger.warning(f"更新AI上下文失败: {e}")
 
-    def set_context(self, content: str, selected_text: str = ""):
-        """设置上下文（兼容性方法）"""
-        self.document_context = content
-        self.selected_text = selected_text
-        logger.debug(f"设置上下文: {len(content)} 字符内容, {len(selected_text)} 字符选中文本")
 
     def set_document_context(self, content: str, doc_type: str = "chapter", metadata: dict = None):
         """设置文档上下文"""
@@ -784,12 +779,14 @@ class ModernAIWidget(QWidget):
             # 创建AI请求
             from src.domain.ai.entities.ai_request import AIRequest
             from src.domain.ai.value_objects.ai_priority import AIPriority
+            from src.domain.ai.value_objects.ai_request_type import AIRequestType
             request = AIRequest(
                 prompt=full_prompt,
                 context=self.document_context,
-                request_type=function_name,
+                request_type=AIRequestType.TEXT_GENERATION,
                 priority=AIPriority.NORMAL,
                 parameters=options,
+                metadata={'function_name': function_name},
                 is_streaming=use_streaming
             )
 

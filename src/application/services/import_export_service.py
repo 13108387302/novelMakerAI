@@ -106,7 +106,7 @@ class ImportExportService(IImportExportService):
                 logger.info("已加载DOCX格式处理器")
             except ImportError:
                 logger.warning("DOCX格式处理器不可用，请安装python-docx")
-                
+
             # 尝试加载PDF处理器
             try:
                 from .import_export.pdf_handler import PdfFormatHandler
@@ -114,7 +114,7 @@ class ImportExportService(IImportExportService):
                 logger.info("已加载PDF格式处理器")
             except ImportError:
                 logger.warning("PDF格式处理器不可用，请安装reportlab")
-                
+
             # 尝试加载Excel处理器
             try:
                 from .import_export.excel_handler import ExcelFormatHandler
@@ -123,7 +123,15 @@ class ImportExportService(IImportExportService):
                 logger.info("已加载Excel格式处理器")
             except ImportError:
                 logger.warning("Excel格式处理器不可用，请安装openpyxl")
-                
+
+            # ZIP 处理器（无第三方依赖）
+            try:
+                from .import_export.zip_handler import ZipFormatHandler
+                self.register_format_handler("zip", ZipFormatHandler(self))
+                logger.info("已加载ZIP格式处理器")
+            except Exception as e:
+                logger.warning(f"ZIP格式处理器加载失败: {e}")
+
         except Exception as e:
             logger.error(f"加载可选格式处理器失败: {e}")
 
@@ -158,8 +166,32 @@ class ImportExportService(IImportExportService):
         start_time = datetime.now()
         
         try:
-            # 获取项目
+            # 获取项目（兼容自定义根路径的项目：先按ID文件，再按索引/路径加载）
             project = await self.project_repository.get_by_id(project_id)
+            if not project:
+                # 回退1：尝试通过索引/路径加载
+                try:
+                    project = await self.project_repository.load(project_id)
+                except Exception as e:
+                    logger.debug(f"通过索引/路径尝试加载项目失败: {e}")
+            if not project:
+                # 回退2：尝试从全局容器获取当前项目根路径后按路径加载
+                try:
+                    from src.shared.ioc.container import get_global_container
+                    container = get_global_container()
+                    if container:
+                        try:
+                            from src.shared.project_context import ProjectPaths
+                            project_paths = container.try_get(ProjectPaths)
+                            if project_paths and project_paths.root:
+                                candidate = await self.project_repository.load_by_path(project_paths.root)
+                                if candidate:
+                                    project = candidate
+                                    logger.info(f"使用项目上下文回退加载项目成功: {project.title} ({project.id})")
+                        except Exception as e2:
+                            logger.debug(f"从项目上下文加载项目失败: {e2}")
+                except Exception as e_cont:
+                    logger.debug(f"获取全局容器失败，无法按路径加载项目: {e_cont}")
             if not project:
                 return ExportResult(
                     success=False,
@@ -170,35 +202,44 @@ class ImportExportService(IImportExportService):
             if not format_type:
                 format_type = self._detect_format_from_path(output_path)
                 if not format_type:
+                    logger.error(f"无法检测文件格式: {output_path}")
                     return ExportResult(
                         success=False,
                         errors=["无法检测文件格式，请指定格式类型"]
                     )
+            logger.info(f"准备导出项目: id={project_id}, 输出路径={output_path}, 格式={format_type}")
 
             # 获取格式处理器
             handler = self.get_format_handler(format_type)
             if not handler:
+                logger.error(f"未找到格式处理器: {format_type}; 已注册={list(self._format_handlers.keys())}")
                 return ExportResult(
                     success=False,
                     errors=[f"不支持的格式: {format_type}"]
                 )
+            logger.info(f"使用处理器: {handler.__class__.__name__}")
 
             # 执行导出
             result = await handler.export_project(project, output_path, options)
-            
+            # 额外记录实际文件存在性
+            try:
+                exists = Path(result.output_path or output_path).exists()
+                logger.info(f"导出处理器返回: success={result.success}, 输出={result.output_path or output_path}, 存在={exists}")
+            except Exception:
+                pass
+
             # 发布事件
             if result.success:
                 try:
                     event = ProjectExportedEvent(
                         project_id=project_id,
                         export_path=str(output_path),
-                        format_type=format_type,
-                        export_time=datetime.now()
+                        export_format=format_type
                     )
                     await self.event_bus.publish_async(event)
                 except Exception as e:
                     logger.warning(f"发布项目导出事件失败: {e}")
-                
+
             return result
 
         except Exception as e:
