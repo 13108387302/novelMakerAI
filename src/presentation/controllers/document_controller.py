@@ -349,6 +349,15 @@ class DocumentController(BaseService, QObject):
             self.logger.error(f"更新文档内容失败: {e}")
             return False
 
+    async def reload_document(self, document_id: str) -> Optional[Document]:
+        """强制重载指定文档（从仓储加载并覆盖打开缓存）"""
+        try:
+            doc = await self.document_service.reload_document(document_id)
+            return doc
+        except Exception as e:
+            self.logger.error(f"重载文档失败: {e}")
+            return None
+
     def _should_open_document(self, document_id: str) -> bool:
         """检查是否应该打开文档（防重复）"""
         import time

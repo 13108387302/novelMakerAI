@@ -611,6 +611,32 @@ class DocumentService(BaseService):
         """是否有打开的文档"""
         return len(self._open_documents) > 0
 
+    async def reload_document(self, document_id: str) -> Optional[Document]:
+        """强制从仓储重新加载文档并更新打开缓存"""
+        try:
+            # 从仓储重新加载，绕过打开缓存逻辑
+            document = await self.document_repository.load(document_id)
+            if not document:
+                logger.warning(f"重载文档失败，未找到: {document_id}")
+                return None
+
+            # 覆盖打开缓存中的文档对象
+            self._open_documents[document_id] = document
+            self._current_document_id = document_id
+
+            # 发布打开事件，通知上层更新
+            event = DocumentOpenedEvent(
+                document_id=document.id,
+                document_title=document.title,
+                project_id=document.project_id
+            )
+            await self.event_publisher.publish_safe(event, "文档重载")
+
+            logger.info(f"文档已重载: {document.title} ({document.id})")
+            return document
+        except Exception as e:
+            logger.error(f"重载文档失败: {e}")
+            return None
 
 
 

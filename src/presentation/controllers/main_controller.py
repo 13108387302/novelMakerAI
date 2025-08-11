@@ -1392,7 +1392,17 @@ class MainController(QObject):
 
                 if reply == QMessageBox.StandardButton.Yes:
                     await self.project_service.open_project(file_path)
-                    self.project_opened.emit(new_project.id)
+                    try:
+                        project = self.project_service.current_project
+                        if project:
+                            self.project_opened.emit(project)
+                        else:
+                            # 兜底：尝试按路径加载再发送
+                            project = await self.project_service.load_project(str(file_path))
+                            if project:
+                                self.project_opened.emit(project)
+                    except Exception as e:
+                        logger.warning(f"切换到新项目后发送打开信号失败: {e}")
             else:
                 self._show_error("另存为失败", "无法保存项目副本")
 
@@ -2165,13 +2175,15 @@ class MainController(QObject):
             if not self._backup_manager_dialog:
                 from src.presentation.dialogs.backup_manager_dialog import BackupManagerDialog
                 from src.application.services.backup_service import BackupService
-
-                # 创建备份服务（从服务中获取仓储实例）
-                backup_service = BackupService(
-                    project_repository=self.project_service.project_repository,
-                    document_repository=self.document_service.document_repository,
-                    backup_dir=Path.home() / "AI小说编辑器" / "backups"
-                )
+                # 统一从全局容器获取 BackupService，确保路径与配置一致
+                try:
+                    from src.shared.ioc.container import get_global_container
+                    container = get_global_container()
+                    backup_service = container.get(BackupService)
+                except Exception as e:
+                    logger.error(f"获取BackupService失败: {e}")
+                    self._show_error("备份管理器", "备份服务不可用，请重启应用或检查依赖注册")
+                    return
 
                 self._backup_manager_dialog = BackupManagerDialog(
                     backup_service=backup_service,
@@ -2207,8 +2219,63 @@ class MainController(QObject):
             logger.info(f"备份恢复成功: {project_id}")
             self.status_message.emit("备份恢复成功")
 
-            # 重新加载项目
-            self.project_opened.emit(project_id)
+            # 清理文档缓存，确保UI看到新内容
+            try:
+                self._clear_document_cache()
+            except Exception as e:
+                logger.debug(f"清理文档缓存失败: {e}")
+
+            # 强制刷新项目树
+            try:
+                current_project = self.project_service.current_project
+                if current_project and getattr(current_project, 'id', None) == project_id:
+                    self._force_refresh_project_tree()
+            except Exception as e:
+                logger.debug(f"刷新项目树失败: {e}")
+
+            # 如果有当前打开文档，恢复后强制重载并刷新当前标签内容
+            try:
+                if hasattr(self.main_window, 'editor_widget') and self.main_window.editor_widget:
+                    current_doc = self.main_window.editor_widget.get_current_document()
+                    if current_doc and getattr(current_doc, 'id', None):
+                        doc_id = current_doc.id
+                        # 强制重载文档对象（覆盖打开缓存）
+                        self._run_async_task(
+                            self.document_controller.reload_document(doc_id),
+                            success_callback=lambda doc: self._refresh_editor_tab_content(doc) if doc else None,
+                            error_callback=lambda e: logger.warning(f"重载文档失败: {e}")
+                        )
+            except Exception as e:
+                logger.debug(f"恢复后重载当前文档失败: {e}")
+
+            # 重新加载项目（通知各处）
+            # 将ID转换为项目对象再发信号，避免下游假设project有属性
+            try:
+                # 同步环境下不使用 await，若需要异步可通过 _run_async_task 包装
+                loop = None
+                try:
+                    import asyncio
+                    loop = asyncio.get_running_loop()
+                except Exception:
+                    loop = None
+                if loop and loop.is_running():
+                    # 在事件循环中，异步获取项目并在回调里发信号
+                    self._run_async_task(
+                        self.project_service.load_project(project_id),
+                        success_callback=lambda p: self.project_opened.emit(p or project_id)
+                    )
+                else:
+                    # 非事件循环环境，直接使用仓储的同步加载回退
+                    project = self.project_service.current_project
+                    if not project or getattr(project, 'id', None) != project_id:
+                        # 尝试通过 repository load（阻塞回退）
+                        try:
+                            project = self.project_service.project_repository.load_sync(project_id)  # 需要仓储提供同步回退
+                        except Exception:
+                            project = project_id  # 回退为ID
+                    self.project_opened.emit(project)
+            except Exception:
+                self.project_opened.emit(project_id)
 
         except Exception as e:
             logger.error(f"处理备份恢复事件失败: {e}")
@@ -2542,6 +2609,15 @@ class MainController(QObject):
                 logger.info(f"在主线程中加载文档到编辑器: {document.title}")
                 # 在主线程中安全地加载文档到编辑器
                 self._main_window.editor_widget.load_document(document)
+                # 若当前标签就是该文档，则刷新内容（覆盖旧内容）
+                try:
+                    tab = self._main_window.editor_widget.get_current_tab()
+                    if tab and getattr(tab, 'document', None) and getattr(tab.document, 'id', None) == document_id:
+                        tab.document = document
+                        if hasattr(tab, 'set_content'):
+                            tab.set_content(document.content or "")
+                except Exception as e:
+                    logger.debug(f"刷新当前标签内容失败: {e}")
                 logger.info(f"文档打开成功: {document_id}")
             elif document:
                 logger.warning(f"文档打开成功但主窗口不可用: {document_id}")

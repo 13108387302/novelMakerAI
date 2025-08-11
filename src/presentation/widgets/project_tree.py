@@ -37,9 +37,11 @@ class ProjectTreeWidget(QTreeWidget):
         self._setup_context_menu()
         self._current_project: Optional[Project] = None
         self._documents: list[Document] = []
-        
+        # 加入加载代次令牌，避免并发/重复批次导致的重复项
+        self._load_token: int = 0
+
         logger.debug("项目树组件初始化完成")
-    
+
     def _setup_ui(self):
         """设置UI"""
         # 设置标题
@@ -98,9 +100,11 @@ class ProjectTreeWidget(QTreeWidget):
                 # 完全重新加载项目结构
                 self._load_project_structure_fast(project)
 
-            # 如果有文档，延迟加载文档内容
+            # 如果有文档，延迟加载文档内容（带令牌防重入）
             if documents:
-                self._schedule_document_loading(documents)
+                self._load_token += 1
+                token = self._load_token
+                self._schedule_document_loading(documents, token)
             else:
                 self._finalize_empty_project_loading()
 
@@ -179,8 +183,8 @@ class ProjectTreeWidget(QTreeWidget):
         except Exception as e:
             logger.error(f"❌ 快速加载项目结构失败: {e}")
 
-    def _schedule_document_loading(self, documents: list[Document]):
-        """调度文档加载"""
+    def _schedule_document_loading(self, documents: list[Document], token: int):
+        """调度文档加载（带令牌，避免重复并发）"""
         try:
             from PyQt6.QtCore import QTimer
 
@@ -190,9 +194,13 @@ class ProjectTreeWidget(QTreeWidget):
             batch_size = 10  # 每批处理10个文档
             batches = [documents[i:i + batch_size] for i in range(0, len(documents), batch_size)]
 
-            logger.info(f"📦 将 {len(documents)} 个文档分为 {len(batches)} 批加载")
+            logger.info(f"📦 将 {len(documents)} 个文档分为 {len(batches)} 批加载 (token={token})")
 
             def load_batch(batch_index):
+                # 如果被新一轮加载取代，停止旧批次
+                if token != self._load_token:
+                    logger.debug(f"加载批次被新任务取代，停止: token={token}")
+                    return
                 if batch_index < len(batches):
                     batch = batches[batch_index]
                     self._load_document_batch(batch)
@@ -202,7 +210,9 @@ class ProjectTreeWidget(QTreeWidget):
                         QTimer.singleShot(10, lambda: load_batch(batch_index + 1))  # 10ms间隔
                     else:
                         # 所有批次完成
-                        self._finalize_document_loading()
+                        # 再次检查token
+                        if token == self._load_token:
+                            self._finalize_document_loading()
 
             # 开始加载第一批
             QTimer.singleShot(50, lambda: load_batch(0))  # 50ms延迟开始

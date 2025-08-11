@@ -13,7 +13,7 @@ import json
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 
 from src.domain.entities.project import Project
 from src.domain.entities.document import Document
@@ -115,10 +115,12 @@ class BackupService:
         self.document_repository = document_repository
         self.backup_dir = backup_dir
         self.backup_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"备份服务初始化: backup_dir={self.backup_dir}")
 
         # 版本存储目录
         self.versions_dir = backup_dir / "versions"
         self.versions_dir.mkdir(parents=True, exist_ok=True)
+        logger.debug(f"版本目录: versions_dir={self.versions_dir}")
 
         # 备份配置
         self.max_backups = 50  # 最大备份数量
@@ -135,27 +137,47 @@ class BackupService:
     ) -> Optional[BackupInfo]:
         """创建项目备份"""
         try:
+            logger.info(f"[备份] 开始创建: project_id={project_id}")
             # 获取项目信息
-            project = await self.project_repository.get_by_id(project_id)
+            # 更稳健：优先通过 load 加载（支持自定义路径与索引回退）
+            project = await self.project_repository.load(project_id)
+            logger.debug(f"[备份] 项目加载结果: exists={bool(project)} title={(getattr(project,'name',None) or getattr(project,'title',None))}")
             if not project:
                 logger.error(f"项目不存在: {project_id}")
                 return None
-            
-            # 获取项目文档
+
+            # 获取项目文档（完整加载，包含正文）
             documents = await self.document_repository.list_by_project(project_id)
-            
+            logger.info(f"[备份] 文档数量: {len(documents)}")
+            full_documents = []
+            try:
+                for d in documents:
+                    try:
+                        loaded = await self.document_repository.load(d.id)
+                        if loaded:
+                            full_documents.append(loaded)
+                        else:
+                            full_documents.append(d)
+                    except Exception:
+                        full_documents.append(d)
+                logger.info(f"[备份] 完整加载文档数量: {len(full_documents)}")
+            except Exception as e:
+                logger.warning(f"[备份] 完整加载文档失败，回退使用轻量文档: {e}")
+                full_documents = documents
+
             # 生成备份ID和路径
             backup_id = f"{project_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             backup_path = self.backup_dir / f"{backup_id}.zip"
-            
+            logger.info(f"[备份] 目标路径: {backup_path}")
+
             # 创建备份ZIP文件
             try:
                 with zipfile.ZipFile(backup_path, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as zipf:
-                    # 添加项目信息
+                    # 添加项目信息（将正文一并写入project.json，作为冗余）
                     try:
                         project_data = {
-                            "project": asdict(project),
-                            "documents": [asdict(doc) for doc in documents],
+                            "project": project.to_dict() if hasattr(project, 'to_dict') else {},
+                            "documents": [doc.to_dict() if hasattr(doc, 'to_dict') else {} for doc in full_documents],
                             "backup_info": {
                                 "id": backup_id,
                                 "created_at": datetime.now().isoformat(),
@@ -164,20 +186,22 @@ class BackupService:
                             }
                         }
 
-                        zipf.writestr("project.json", json.dumps(project_data, ensure_ascii=False, indent=2))
+                        zipf.writestr("project.json", json.dumps(project_data, ensure_ascii=False, indent=2, default=str))
+                        logger.info(f"[备份] 写入project.json，包含文档数: {len(project_data.get('documents', []))}")
 
                     except Exception as e:
                         logger.error(f"序列化项目数据失败: {e}")
                         raise
 
-                    # 添加文档内容
-                    for doc in documents:
+                    # 添加文档内容（独立正文文件，便于快速恢复）
+                    for doc in full_documents:
                         try:
-                            if doc.content:
-                                doc_filename = f"documents/{doc.id}.txt"
-                                zipf.writestr(doc_filename, doc.content)
+                            content = getattr(doc, 'content', '') or ''
+                            doc_filename = f"documents/{doc.id}.txt"
+                            zipf.writestr(doc_filename, content)
+                            logger.info(f"[备份] 写入文档正文: {doc_filename} len={len(content)}")
                         except Exception as e:
-                            logger.warning(f"添加文档内容失败 {doc.id}: {e}")
+                            logger.warning(f"添加文档内容失败 {getattr(doc,'id','?')}: {e}")
                             continue
 
             except Exception as e:
@@ -185,7 +209,7 @@ class BackupService:
                 if backup_path.exists():
                     backup_path.unlink()
                 raise
-            
+
             # 创建备份信息
             backup_info = BackupInfo(
                 id=backup_id,
@@ -196,20 +220,21 @@ class BackupService:
                 description=description,
                 backup_type=backup_type
             )
-            
+
             # 清理旧备份
             await self._cleanup_old_backups(project_id)
-            
+
             logger.info(f"项目备份创建成功: {backup_path}")
             return backup_info
-            
+
         except Exception as e:
             logger.error(f"创建备份失败: {e}")
             return None
     
-    async def restore_backup(self, backup_path: Path) -> Optional[str]:
+    async def restore_backup(self, backup_path: Path, target_root_path: Optional[Path] = None) -> Optional[str]:
         """恢复备份"""
         try:
+            logger.info(f"[恢复] 开始恢复: path={backup_path}")
             if not backup_path.exists():
                 logger.error(f"备份文件不存在: {backup_path}")
                 return None
@@ -218,37 +243,123 @@ class BackupService:
             if not zipfile.is_zipfile(backup_path):
                 logger.error(f"无效的备份文件格式: {backup_path}")
                 return None
-            
+
             # 解压备份文件
             with zipfile.ZipFile(backup_path, 'r') as zipf:
                 # 读取项目信息
-                project_data = json.loads(zipf.read("project.json").decode('utf-8'))
-                
+                project_json = zipf.read("project.json").decode('utf-8')
+                logger.debug(f"[恢复] project.json 大小: {len(project_json)}")
+                project_data = json.loads(project_json)
+                logger.debug(f"[恢复] 包含文档数: {len(project_data.get('documents', []))}")
+
                 # 恢复项目
                 project_dict = project_data["project"]
-                project = Project(**project_dict)
-                
+                try:
+                    project = Project.from_dict(project_dict)
+                except Exception:
+                    # 兼容旧备份格式
+                    project = Project(**project_dict)
+
+                # 如果未包含 root_path，则使用目标路径（用于覆盖当前项目目录）
+                try:
+                    if (not getattr(project, 'root_path', None)) and target_root_path:
+                        logger.info(f"[恢复] 设置项目root_path: {target_root_path}")
+                        project.root_path = target_root_path
+                except Exception as e:
+                    logger.debug(f"[恢复] 设置root_path失败: {e}")
+
                 # 保存项目
                 await self.project_repository.save(project)
-                
-                # 恢复文档
-                documents_data = project_data["documents"]
+
+                # 恢复文档（全量回滚：先删除现存中不在备份内的文档，再写入备份中的文档）
+                documents_data = project_data.get("documents", [])
+                backup_doc_ids = set()
+                for d in documents_data:
+                    try:
+                        if isinstance(d, dict) and d.get("id"):
+                            backup_doc_ids.add(d.get("id"))
+                    except Exception:
+                        continue
+                logger.info(f"[恢复] 备份文档IDs: {sorted(list(backup_doc_ids))}")
+
+                # 删除项目中多余的文档（不在备份里的）
+                try:
+                    # 恢复前清理项目级缓存，确保列出真实文件
+                    try:
+                        # 优先按项目清理
+                        clear_project_fn = getattr(self.document_repository, '_clear_project_cache', None)
+                        if callable(clear_project_fn):
+                            clear_project_fn(project.id)
+                            logger.info(f"[恢复] 已清理项目文档缓存: {project.id}")
+                        # 兜底：直接删除统一性能管理器中的特定键
+                        pm = getattr(self.document_repository, 'performance_manager', None)
+                        cache_prefix = getattr(self.document_repository, '_cache_prefix', 'doc_repo')
+                        if pm:
+                            pm.cache_delete(f"{cache_prefix}:project_docs:{project.id}")
+                            logger.debug(f"[恢复] 已删除缓存键: {cache_prefix}:project_docs:{project.id}")
+                    except Exception as ce:
+                        logger.debug(f"[恢复] 清理文档缓存失败: {ce}")
+
+                    current_docs = await self.document_repository.list_by_project(project.id)
+                    current_ids = [getattr(cd, 'id', None) for cd in (current_docs or [])]
+                    logger.info(f"[恢复] 当前项目文档IDs: {current_ids}")
+                    for cd in current_docs or []:
+                        try:
+                            if getattr(cd, 'id', None) and cd.id not in backup_doc_ids:
+                                ok = await self.document_repository.delete(cd.id)
+                                logger.info(f"[恢复] 删除多余文档: {cd.id} ok={ok}")
+                        except Exception as de:
+                            logger.warning(f"删除多余文档失败: {getattr(cd, 'id', None)} - {de}")
+
+                    # 目录级别兜底清理：直接扫描 documents 目录与类型子目录
+                    try:
+                        base_path = getattr(self.document_repository, 'base_path', None)
+                        if base_path:
+                            logger.info(f"[恢复] 目录清理起点: {base_path}")
+                            to_remove = []
+                            # 收集所有 .json 和 _content.txt
+                            candidates = list(base_path.glob("*.json")) + list(base_path.glob("*_content.txt"))
+                            # 类型子目录
+                            for sub in [p for p in base_path.iterdir() if p.is_dir()]:
+                                candidates += list(sub.glob("*.json")) + list(sub.glob("*_content.txt"))
+                            for f in candidates:
+                                stem = f.stem.replace("_content", "")
+                                if stem and stem not in backup_doc_ids:
+                                    to_remove.append(f)
+                            for f in to_remove:
+                                try:
+                                    f.unlink(missing_ok=True)
+                                    logger.info(f"[恢复] 目录清理: 删除文件 {f}")
+                                except Exception as fe:
+                                    logger.warning(f"[恢复] 目录清理失败: {f} - {fe}")
+                    except Exception as de:
+                        logger.debug(f"[恢复] 目录级别清理失败: {de}")
+                except Exception as e:
+                    logger.warning(f"获取当前项目文档失败，跳过删除多余文档: {e}")
+
+                # 写入备份中的文档
                 for doc_data in documents_data:
-                    document = Document(**doc_data)
-                    
+                    try:
+                        document = Document.from_dict(doc_data)
+                    except Exception:
+                        document = Document(**doc_data)
+
                     # 读取文档内容
                     doc_filename = f"documents/{document.id}.txt"
                     try:
                         document.content = zipf.read(doc_filename).decode('utf-8')
+                        logger.debug(f"[恢复] 读取正文: {doc_filename} len={len(document.content)}")
                     except KeyError:
-                        document.content = ""
-                    
+                        document.content = document.content or ""
+                        logger.debug(f"[恢复] 备份缺少正文文件，使用现有content: {doc_filename}")
+
                     # 保存文档
-                    await self.document_repository.save(document)
-            
+                    ok = await self.document_repository.save(document)
+                    logger.info(f"[恢复] 写入文档: id={document.id} title={getattr(document,'title','')} ok={ok}")
+
             logger.info(f"备份恢复成功: {backup_path}")
             return project.id
-            
+
         except Exception as e:
             logger.error(f"恢复备份失败: {e}")
             return None
@@ -281,9 +392,10 @@ class BackupService:
                             description=backup_data.get("description", ""),
                             backup_type=backup_data.get("backup_type", "manual")
                         )
-                        
+
                         backups.append(backup_info)
-                        
+
+
                 except Exception as e:
                     logger.warning(f"读取备份文件失败: {backup_file}, {e}")
                     continue

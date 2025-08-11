@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QWidget, QLabel, QProgressBar, QGroupBox, QTableWidget,
     QTableWidgetItem, QPushButton, QTextEdit, QHeaderView
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QThread, QThreadPool
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QThread, QThreadPool, QRunnable
 from PyQt6.QtGui import QFont
 from ._stats_loader import StatsTask
 # 图表功能暂时禁用，需要安装PyQt6-Charts
@@ -36,6 +36,30 @@ class WordCountDialog(QDialog):
         self._pending_task = None
 
         self.document_service = document_service
+        # 线程池通用方法（UI线程安全回调）先初始化，避免后续引用为空
+        self._analysis_pool = QThreadPool.globalInstance()
+        class _Signals(QObject):
+            finished = pyqtSignal(object)
+        class _Task(QRunnable):
+            def __init__(self, fn, cb):
+                super().__init__()
+                self.fn = fn
+                self.cb = cb
+                self.s = _Signals()
+                self.s.finished.connect(cb)
+            def run(self):
+                try:
+                    res = self.fn()
+                except Exception:
+                    res = None
+                self.s.finished.emit(res)
+        def _run_in_pool(fn, cb):
+            t = _Task(fn, cb)
+            self._analysis_pool.start(t)
+        self._run_in_pool = _run_in_pool
+
+
+        # 构建UI并触发首次加载
         self._setup_ui()
         self._load_statistics()
 
@@ -560,6 +584,35 @@ class WordCountDialog(QDialog):
             self._update_documents_table(documents)
 
             # 计算文本分析
+
+            # 将文本分析丢到线程池，避免主线程卡顿
+            def _analysis_task():
+                try:
+                    all_content = ""
+                    for doc in documents:
+                        if (getattr(getattr(doc, 'type', object), 'value', '') == "chapter"):
+                            all_content += doc.content + "\n"
+                    if not all_content.strip():
+                        return 0,0,0,0
+                    import re as _re
+                    sentences = _re.split(r'[。！？.!?]', all_content)
+                    sentence_count = len([s for s in sentences if s.strip()])
+                    paragraphs = [p for p in all_content.split('\n') if p.strip()]
+                    paragraph_count = len(paragraphs)
+                    total_words = len(all_content)
+                    avg_sentence_length = total_words // sentence_count if sentence_count > 0 else 0
+                    avg_paragraph_length = total_words // paragraph_count if paragraph_count > 0 else 0
+                    return sentence_count, paragraph_count, avg_sentence_length, avg_paragraph_length
+                except Exception:
+                    return 0,0,0,0
+            def _analysis_done(result):
+                s_count, p_count, avg_s, avg_p = result or (0,0,0,0)
+                self.sentence_count_label.setText(str(s_count))
+                self.paragraph_count_label.setText(str(p_count))
+                self.avg_sentence_length_label.setText(f"{avg_s} 字")
+                self.avg_paragraph_length_label.setText(f"{avg_p} 字")
+            self._run_in_pool(_analysis_task, _analysis_done)
+
             self._calculate_text_analysis(documents)
         except Exception as e:
             logger.error(f"更新统计UI失败: {e}")

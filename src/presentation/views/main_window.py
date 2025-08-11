@@ -471,7 +471,13 @@ class MainWindow(QMainWindow):
 
             # 工具菜单
             elif action_name == "word_count":
-                self.controller.show_word_count()
+                # 兼容：控制器中方法名为 show_word_count
+                if hasattr(self.controller, 'show_word_count'):
+                    self.controller.show_word_count()
+                elif hasattr(self.controller, 'word_count'):
+                    self.controller.word_count()
+                else:
+                    logger.warning("控制器未实现字数统计处理方法")
             elif action_name == "backup_management":
                 self.controller.backup_management()
             elif action_name == "settings":
