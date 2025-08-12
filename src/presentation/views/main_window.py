@@ -372,30 +372,35 @@ class MainWindow(QMainWindow):
             logger.error(f"设置快捷键失败: {e}")
 
     def _restore_window_state(self):
-        """恢复窗口状态"""
+        """恢复窗口状态（在无项目上下文时优雅降级）"""
         try:
-            # 从设置服务恢复窗口状态
-            settings = self.controller.settings_service
+            # 从控制器获取设置服务；在启动页/无项目上下文时可能不可用
+            settings_service = getattr(self.controller, 'settings_service', None)
 
+            geometry = None
             # 恢复窗口几何
-            geometry = settings.get_window_geometry()
-            if geometry:
-                try:
-                    # 尝试从base64字符串恢复
-                    if isinstance(geometry, str):
-                        geometry_bytes = QByteArray.fromBase64(geometry.encode())
-                    else:
-                        geometry_bytes = QByteArray(geometry)
-                    self.restoreGeometry(geometry_bytes)
-                except Exception as e:
-                    logger.warning(f"恢复窗口几何失败: {e}")
-
+            try:
+                if settings_service and hasattr(settings_service, 'get_window_geometry'):
+                    geometry = settings_service.get_window_geometry()
+                    if geometry:
+                        try:
+                            # 尝试从base64字符串恢复
+                            if isinstance(geometry, str):
+                                geometry_bytes = QByteArray.fromBase64(geometry.encode())
+                            else:
+                                geometry_bytes = QByteArray(geometry)
+                            self.restoreGeometry(geometry_bytes)
+                        except Exception as e:
+                            logger.warning(f"恢复窗口几何失败: {e}")
+                else:
+                    logger.debug("设置服务不可用或不支持get_window_geometry，跳过窗口几何恢复")
+            except Exception as e:
+                logger.warning(f"读取窗口几何失败: {e}")
 
             # 若未能恢复有效几何，则使用默认尺寸
             try:
                 if not geometry:
                     from config.settings import Settings
-                    # 从容器或全局上下文读取设置，若不可用则使用常量
                     default_w = DEFAULT_WINDOW_WIDTH
                     default_h = DEFAULT_WINDOW_HEIGHT
                     try:
@@ -403,10 +408,10 @@ class MainWindow(QMainWindow):
                         container = get_global_container()
                         if container is not None:
                             try:
-                                settings = container.try_get(Settings)
-                                if settings and getattr(settings, 'ui', None):
-                                    default_w = int(getattr(settings.ui, 'window_width', default_w))
-                                    default_h = int(getattr(settings.ui, 'window_height', default_h))
+                                settings_obj = container.try_get(Settings)
+                                if settings_obj and getattr(settings_obj, 'ui', None):
+                                    default_w = int(getattr(settings_obj.ui, 'window_width', default_w))
+                                    default_h = int(getattr(settings_obj.ui, 'window_height', default_h))
                             except Exception:
                                 pass
                     except Exception:
@@ -416,16 +421,22 @@ class MainWindow(QMainWindow):
                 logger.warning(f"应用默认窗口尺寸失败: {e}")
 
             # 恢复停靠窗口状态
-            dock_state = settings.get_dock_state()
-            if dock_state:
-                try:
-                    if isinstance(dock_state, str):
-                        state_bytes = QByteArray.fromBase64(dock_state.encode())
-                    else:
-                        state_bytes = QByteArray(dock_state)
-                    self.dock_builder.restore_dock_state(self, state_bytes)
-                except Exception as e:
-                    logger.warning(f"恢复停靠窗口状态失败: {e}")
+            try:
+                if settings_service and hasattr(settings_service, 'get_dock_state'):
+                    dock_state = settings_service.get_dock_state()
+                    if dock_state:
+                        try:
+                            if isinstance(dock_state, str):
+                                state_bytes = QByteArray.fromBase64(dock_state.encode())
+                            else:
+                                state_bytes = QByteArray(dock_state)
+                            self.dock_builder.restore_dock_state(self, state_bytes)
+                        except Exception as e:
+                            logger.warning(f"恢复停靠窗口状态失败: {e}")
+                else:
+                    logger.debug("设置服务不可用或不支持get_dock_state，跳过停靠窗口恢复")
+            except Exception as e:
+                logger.warning(f"读取停靠窗口状态失败: {e}")
 
         except Exception as e:
             logger.warning(f"恢复窗口状态失败: {e}")
