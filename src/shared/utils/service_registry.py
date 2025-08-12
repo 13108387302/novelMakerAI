@@ -302,5 +302,7 @@ class ServiceRegistryFactory:
             },
             'default_provider': settings_service.get_setting('ai.default_provider', 'deepseek'),
             'max_concurrent_requests': settings_service.get_setting('ai.max_concurrent_requests', 10),
-            'request_timeout': settings_service.get_setting('ai.request_timeout', ASYNC_MEDIUM_TIMEOUT)
+            'request_timeout': settings_service.get_setting('ai.request_timeout', ASYNC_MEDIUM_TIMEOUT),
+            'retry_attempts': settings_service.get_setting('ai.retry_count', 3),
+            'enable_streaming': settings_service.get_setting('ai.enable_streaming', True)
         }

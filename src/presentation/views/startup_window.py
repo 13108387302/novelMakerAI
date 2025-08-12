@@ -153,6 +153,22 @@ class StartupWindow(QDialog):
         self.recent_projects = recent_projects or []
         self.selected_project_path: Optional[str] = None
         self.created_project_path: Optional[str] = None
+        self._max_recent_to_show: int = 10
+
+        # 尝试从设置读取最近项目显示数量
+        try:
+            from src.shared.ioc.container import get_global_container
+            container = get_global_container()
+            if container is not None:
+                try:
+                    from src.application.services.settings_service import SettingsService
+                    ss = container.try_get(SettingsService)
+                    if ss is not None:
+                        self._max_recent_to_show = int(ss.get_setting("ui.recent_projects_count", 10))
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
         self._setup_ui()
         self._setup_connections()
@@ -697,7 +713,9 @@ class StartupWindow(QDialog):
             self.projects_layout.addWidget(empty_container)
         else:
             # 添加最近项目
-            for project in self.recent_projects:
+            # 仅显示部分最近项目
+            to_show = self.recent_projects[: max(0, int(self._max_recent_to_show))]
+            for project in to_show:
                 item = RecentProjectItem(
                     project['path'],
                     project['name'],

@@ -9,6 +9,8 @@
 import json
 import asyncio
 import logging
+import os
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional, TypeVar, List, Iterator
 from datetime import datetime
@@ -94,8 +96,20 @@ class UnifiedFileOperations:
                 with open(temp_file, 'r', encoding=DEFAULT_ENCODING) as f:
                     json.load(f)
 
-                # 原子性替换
-                temp_file.replace(file_path)
+                # 原子性替换（Windows下可能因占用而失败，增加重试与回退）
+                replace_exc = None
+                for attempt in range(5):
+                    try:
+                        # 优先使用 os.replace（跨平台原子替换）
+                        os.replace(str(temp_file), str(file_path))
+                        replace_exc = None
+                        break
+                    except Exception as e:
+                        replace_exc = e
+                        time.sleep(0.1 * (attempt + 1))  # 退避
+                if replace_exc is not None:
+                    # 最后尝试 Path.replace
+                    temp_file.replace(file_path)
 
             await asyncio.get_event_loop().run_in_executor(None, _write_file)
 
@@ -255,8 +269,18 @@ class UnifiedFileOperations:
                 with open(temp_file, 'w', encoding=DEFAULT_ENCODING) as f:
                     f.write(content)
 
-                # 原子性替换
-                temp_file.replace(file_path)
+                # 原子性替换（Windows下可能因占用而失败，增加重试与回退）
+                replace_exc = None
+                for attempt in range(5):
+                    try:
+                        os.replace(str(temp_file), str(file_path))
+                        replace_exc = None
+                        break
+                    except Exception as e:
+                        replace_exc = e
+                        time.sleep(0.1 * (attempt + 1))
+                if replace_exc is not None:
+                    temp_file.replace(file_path)
 
             await asyncio.get_event_loop().run_in_executor(None, _write_file)
 

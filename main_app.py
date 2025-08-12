@@ -152,7 +152,7 @@ class AINovelEditorApp:
             import threading
             current_thread = threading.current_thread()
             raise RuntimeError(f"必须在主线程中执行此操作。当前线程: {current_thread.ident}")
-    
+
     def initialize(self) -> bool:
         """
         初始化应用程序的所有组件
@@ -188,6 +188,17 @@ class AINovelEditorApp:
             success = create_splash_and_execute_steps(self.app, self)
             if not success:
                 return False
+
+            # 在没有项目上下文前也尽量应用语言（按全局/默认设置）
+            try:
+                lang_code = None
+                if self.settings and getattr(self.settings, 'ui', None):
+                    lang_code = getattr(self.settings.ui, 'language', None)
+                # 默认 zh_CN
+                lang_code = lang_code or 'zh_CN'
+                self._apply_language(lang_code)
+            except Exception as _:
+                pass
 
             logger.info("✅ 应用程序初始化完成")
             return True
@@ -250,7 +261,7 @@ class AINovelEditorApp:
         self.plugin_manager = None
 
         return True
-    
+
     @handle_errors("依赖注册", show_dialog=False)
     def _register_dependencies(self) -> bool:
         """
@@ -315,7 +326,7 @@ class AINovelEditorApp:
             )
 
         self.container.register_singleton(MainController, create_main_controller)
-    
+
     @handle_errors("应用服务初始化", show_dialog=False)
     def _initialize_services(self) -> bool:
         """初始化服务"""
@@ -399,15 +410,15 @@ class AINovelEditorApp:
         self._load_plugins()
 
         return True
-    
+
     def _connect_signals(self):
         """连接信号"""
         try:
             # 连接主题变更信号
             self.theme_manager.theme_changed.connect(self._on_theme_changed)
-            
+
             logger.debug("信号连接完成")
-            
+
         except Exception as e:
             logger.error(f"信号连接失败: {e}")
 
@@ -452,7 +463,7 @@ class AINovelEditorApp:
 
         except Exception as e:
             logger.error(f"应用主题失败: {e}")
-    
+
     def _setup_async_loop(self):
         """设置异步事件循环"""
         if self._is_shutting_down:
@@ -567,12 +578,12 @@ class AINovelEditorApp:
     def _on_theme_changed(self, theme_name: str):
         """主题变更处理"""
         logger.info(f"主题已变更: {theme_name}")
-        
+
         # 保存主题设置
         if self.app_service:
             settings_service = self.container.get(SettingsService)
             settings_service.set_setting("ui.theme", theme_name)
-    
+
     def run(self) -> int:
         """
         运行AI小说编辑器应用程序
@@ -607,9 +618,55 @@ class AINovelEditorApp:
             if not self._initialize_project_context(project_path):
                 return 1
 
+            # 启动项目设置热更新（watchdog 监听 .novel_editor）
+            try:
+                from src.shared.config.project_settings_hot_reloader import ProjectSettingsHotReloader
+                from src.infrastructure.ai.unified_ai_client_manager import get_unified_ai_client_manager
+
+                def _apply_ai_config():
+                    try:
+                        # 将最新 Settings 映射为 AIOrchestrationService 的配置并更新
+                        from src.shared.utils.service_registry import ServiceRegistryFactory
+                        srf = ServiceRegistryFactory(self.container, self.settings, self.event_bus)
+                        ai_config = srf._build_ai_config(self.container.get(SettingsService))
+                        mgr = get_unified_ai_client_manager()
+                        if hasattr(mgr, 'update_config'):
+                            mgr.update_config(ai_config)
+                    except Exception:
+                        pass
+
+                def _apply_theme(theme_name: str):
+                    try:
+                        if self.main_window and hasattr(self.main_window, 'theme_manager'):
+                            from src.presentation.styles.theme_manager import ThemeType
+                            theme_map = {"light": ThemeType.LIGHT, "dark": ThemeType.DARK, "auto": ThemeType.AUTO}
+                            self.main_window.theme_manager.set_theme(theme_map.get(theme_name, ThemeType.DARK))
+                    except Exception:
+                        pass
+
+                hot = ProjectSettingsHotReloader(
+                    project_root=project_path,
+                    apply_language=lambda lang: self._apply_language(lang),
+                    apply_theme=_apply_theme,
+                    apply_ai_config=_apply_ai_config,
+                )
+                self.container.register_instance(ProjectSettingsHotReloader, hot)
+                hot.start()
+            except Exception as e:
+                logger.warning(f"启动项目设置热更新失败: {e}")
+
+
             # 注册依赖（现在有了项目上下文）
             if not self._register_dependencies():
                 return 1
+
+            # 项目上下文就绪后再应用一次语言（项目级设置可能不同）
+            try:
+                if self.settings and getattr(self.settings, 'ui', None):
+                    self._apply_language(getattr(self.settings.ui, 'language', 'zh_CN'))
+            except Exception:
+                pass
+
 
             # 创建用户界面
             if not self._create_ui():
@@ -631,6 +688,17 @@ class AINovelEditorApp:
             return 1
         finally:
             self._cleanup()
+
+    def _apply_language(self, _lang_code: str):
+        """应用界面语言（若有翻译文件则加载）"""
+        try:
+            # 目前默认中文，无翻译包时仅占位
+            # 如果未来提供 .qm 资源，可在此按 lang_code 加载并安装
+            # 示例：translator.load(f":/i18n/app_{_lang_code}.qm")
+            # QApplication.instance().installTranslator(translator)
+            pass
+        except Exception as e:
+            logger.debug(f"语言应用失败: {e}")
 
     def _show_startup_page(self) -> Optional[Path]:
         """显示启动页面选择项目"""
@@ -695,7 +763,27 @@ class AINovelEditorApp:
                             result = {}
                             def runner():
                                 try:
-                                    proj = asyncio.run(svc.create_project(name=name, project_path=str(target_path)))
+                                    # 从info映射类型与作者
+                                    from src.domain.entities.project import ProjectType
+                                    proj_type = info.get('type', 'novel')
+                                    if not isinstance(proj_type, ProjectType):
+                                        s = str(proj_type).strip()
+                                        zh_map = {"小说": ProjectType.NOVEL, "散文": ProjectType.ESSAY, "诗歌": ProjectType.POETRY, "剧本": ProjectType.SCRIPT, "其他": ProjectType.OTHER}
+                                        pt = zh_map.get(s)
+                                        if pt is None:
+                                            try:
+                                                pt = getattr(ProjectType, s.upper())
+                                            except Exception:
+                                                try:
+                                                    pt = ProjectType(s.lower())
+                                                except Exception:
+                                                    pt = ProjectType.NOVEL
+                                    else:
+                                        pt = proj_type
+                                    author = (info.get('author') or '').strip()
+                                    desc = info.get('description') or ''
+                                    wc = int(info.get('word_count') or 80000)
+                                    proj = asyncio.run(svc.create_project(name=name, project_type=pt, description=desc, author=author, target_word_count=wc, project_path=str(target_path)))
                                     result['proj'] = proj
                                 except Exception as e:
                                     result['error'] = e
@@ -829,14 +917,14 @@ class AINovelEditorApp:
 
 
     # 欢迎消息相关方法已移除，现在直接进入项目选择流程
-    
+
     def _show_error(self, title: str, message: str):
         """显示错误消息"""
         if self.app:
             QMessageBox.critical(None, title, message)
         else:
             print(f"错误: {title} - {message}")
-    
+
     def _cleanup(self):
         """清理资源"""
         if self._is_shutting_down:
@@ -862,6 +950,16 @@ class AINovelEditorApp:
                     self.plugin_manager.shutdown()
                 except Exception as e:
                     logger.error(f"关闭插件管理器失败: {e}")
+
+            # 2b. 停止项目设置热更新
+            try:
+                from src.shared.config.project_settings_hot_reloader import ProjectSettingsHotReloader
+                if hasattr(self, 'container') and self.container:
+                    hot = self.container.try_get(ProjectSettingsHotReloader)
+                    if hot:
+                        hot.stop()
+            except Exception as e:
+                logger.warning(f"停止项目设置热更新失败: {e}")
 
             # 3. 关闭AI编排服务
             if hasattr(self, 'ai_service') and self.ai_service:

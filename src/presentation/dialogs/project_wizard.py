@@ -42,57 +42,57 @@ class ProjectInfoPage(QWizardPage):
         super().__init__()
         self.setTitle("项目基本信息")
         self.setSubTitle("请填写项目的基本信息")
-        
+
         layout = QVBoxLayout(self)
-        
+
         # 项目信息组
         info_group = QGroupBox("项目信息")
         info_layout = QGridLayout(info_group)
-        
+
         # 项目名称
         info_layout.addWidget(QLabel("项目名称 *:"), 0, 0)
         self.name_edit = QLineEdit()
         self.name_edit.setPlaceholderText("输入项目名称...")
         info_layout.addWidget(self.name_edit, 0, 1)
-        
+
         # 项目类型
         info_layout.addWidget(QLabel("项目类型:"), 1, 0)
         self.type_combo = QComboBox()
         self.type_combo.addItems(["小说", "散文", "诗歌", "剧本", "其他"])
         info_layout.addWidget(self.type_combo, 1, 1)
-        
+
         # 作者
         info_layout.addWidget(QLabel("作者:"), 2, 0)
         self.author_edit = QLineEdit()
         self.author_edit.setPlaceholderText("输入作者姓名...")
         info_layout.addWidget(self.author_edit, 2, 1)
-        
+
         # 类型
         info_layout.addWidget(QLabel("类型:"), 3, 0)
         self.genre_edit = QLineEdit()
         self.genre_edit.setPlaceholderText("如：科幻、言情、悬疑...")
         info_layout.addWidget(self.genre_edit, 3, 1)
-        
+
         layout.addWidget(info_group)
-        
+
         # 项目描述
         desc_group = QGroupBox("项目描述")
         desc_layout = QVBoxLayout(desc_group)
-        
+
         self.description_edit = QTextEdit()
         self.description_edit.setMaximumHeight(120)
         self.description_edit.setPlaceholderText("简要描述你的项目内容、主题或创作想法...")
         desc_layout.addWidget(self.description_edit)
-        
+
         layout.addWidget(desc_group)
-        
+
         # 注册字段
         self.registerField("name*", self.name_edit)
         self.registerField("type", self.type_combo, "currentText")
         self.registerField("author", self.author_edit)
         self.registerField("genre", self.genre_edit)
         self.registerField("description", self.description_edit, "plainText")
-    
+
     def validatePage(self):
         """验证页面"""
         if not self.name_edit.text().strip():
@@ -100,64 +100,127 @@ class ProjectInfoPage(QWizardPage):
             return False
         return True
 
+    def initializePage(self):
+        """页面显示前，预填默认作者与体裁（不覆盖用户已输入）。"""
+        try:
+            from src.shared.ioc.container import get_global_container
+            container = get_global_container()
+            settings_service = None
+            if container is not None:
+                try:
+                    from src.application.services.settings_service import SettingsService
+                    settings_service = container.try_get(SettingsService)
+                except Exception:
+                    settings_service = None
+            def _apply_defaults(author: str, genre: str, type_code: str):
+                if not self.author_edit.text().strip() and author:
+                    self.author_edit.setText(author)
+                if not self.genre_edit.text().strip() and genre:
+                    self.genre_edit.setText(genre)
+                # 依据默认项目类型选择下拉项（兼容旧值）
+                type_map = {
+                    "novel": "小说",
+                    "essay": "散文",
+                    "poetry": "诗歌",
+                    "script": "剧本",
+                    "other": "其他",
+                    # 兼容历史/别名
+                    "prose": "散文",
+                    "poem": "诗歌",
+                }
+                display = type_map.get((type_code or "").lower())
+                if display:
+                    idx = self.type_combo.findText(display, Qt.MatchFlag.MatchFixedString)
+                    if idx >= 0:
+                        self.type_combo.setCurrentIndex(idx)
+
+            if settings_service is not None:
+                default_author = settings_service.get_setting("project.default_author", "")
+                default_genre = settings_service.get_setting("project.default_genre", "")
+                default_type = str(settings_service.get_setting("project.default_project_type", "novel"))
+                _apply_defaults(default_author, default_genre, default_type)
+            else:
+                # 启动页场景：无项目上下文，回退读取最近项目的 user_settings.json
+                try:
+                    from src.shared.managers.recent_projects_manager import get_recent_projects_manager
+                    rpm = get_recent_projects_manager()
+                    recent = rpm.get_recent_projects()
+                    if recent:
+                        from pathlib import Path
+                        cfg = Path(recent[0]['path']) / ".novel_editor" / "user_settings.json"
+                        if cfg.exists():
+                            import json
+                            data = json.loads(cfg.read_text(encoding="utf-8"))
+                            pj = data.get("project", {}) if isinstance(data, dict) else {}
+                            _apply_defaults(
+                                pj.get("default_author", ""),
+                                pj.get("default_genre", ""),
+                                pj.get("default_project_type", "novel"),
+                            )
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+
 
 class ProjectSettingsPage(QWizardPage):
     """项目设置页面"""
-    
+
     def __init__(self):
         super().__init__()
         self.setTitle("项目设置")
         self.setSubTitle("配置项目的详细设置")
-        
+
         layout = QVBoxLayout(self)
-        
+
         # 目标设置
         target_group = QGroupBox("创作目标")
         target_layout = QGridLayout(target_group)
-        
+
         target_layout.addWidget(QLabel("目标字数:"), 0, 0)
         self.word_count_spin = QSpinBox()
         self.word_count_spin.setRange(1000, 10000000)
         self.word_count_spin.setValue(80000)
         self.word_count_spin.setSuffix(" 字")
         target_layout.addWidget(self.word_count_spin, 0, 1)
-        
+
         target_layout.addWidget(QLabel("预计章节数:"), 1, 0)
         self.chapter_count_spin = QSpinBox()
         self.chapter_count_spin.setRange(1, 1000)
         self.chapter_count_spin.setValue(20)
         self.chapter_count_spin.setSuffix(" 章")
         target_layout.addWidget(self.chapter_count_spin, 1, 1)
-        
+
         layout.addWidget(target_group)
-        
+
         # 项目选项
         options_group = QGroupBox("项目选项")
         options_layout = QVBoxLayout(options_group)
-        
+
         self.auto_backup_check = QCheckBox("启用自动备份")
         self.auto_backup_check.setChecked(True)
         options_layout.addWidget(self.auto_backup_check)
-        
+
         self.version_control_check = QCheckBox("启用版本控制")
         self.version_control_check.setChecked(True)
         options_layout.addWidget(self.version_control_check)
-        
+
         self.ai_assistance_check = QCheckBox("启用AI写作助手")
         self.ai_assistance_check.setChecked(True)
         options_layout.addWidget(self.ai_assistance_check)
-        
+
         layout.addWidget(options_group)
-        
+
         # 存储位置
         storage_group = QGroupBox("存储位置")
         storage_layout = QGridLayout(storage_group)
-        
+
         storage_layout.addWidget(QLabel("项目文件夹:"), 0, 0)
         self.location_edit = QLineEdit()
         self.location_edit.setReadOnly(True)
         storage_layout.addWidget(self.location_edit, 0, 1)
-        
+
         self.browse_btn = QPushButton("浏览...")
         self.browse_btn.clicked.connect(self._browse_location)
         storage_layout.addWidget(self.browse_btn, 0, 2)
@@ -168,7 +231,30 @@ class ProjectSettingsPage(QWizardPage):
         storage_layout.addWidget(hint_label, 1, 0, 1, 3)
 
         layout.addWidget(storage_group)
-        
+
+        def initializePage(self):
+            """显示设置页时，从设置初始化默认目标字数、选项和默认位置。"""
+            try:
+                from src.shared.ioc.container import get_global_container
+                container = get_global_container()
+                ss = None
+                if container is not None:
+                    try:
+                        from src.application.services.settings_service import SettingsService
+                        ss = container.try_get(SettingsService)
+                    except Exception:
+                        ss = None
+                if ss is not None:
+                    default_wc = int(ss.get_setting("project.default_target_word_count", 80000))
+                    if self.word_count_spin.value() == 80000:  # 仅在初始值时覆盖
+                        self.word_count_spin.setValue(default_wc)
+                    self.auto_backup_check.setChecked(bool(ss.get_setting("project.auto_backup", True)))
+                    self.version_control_check.setChecked(bool(ss.get_setting("project.version_control", True)))
+                    # 默认位置（如果有设置可加入），暂按当前逻辑即可
+            except Exception:
+                pass
+
+
         # 设置默认位置为当前工作目录
         import os
         current_dir = os.getcwd()
@@ -189,7 +275,7 @@ class ProjectSettingsPage(QWizardPage):
                 logger.error(f"创建备用项目目录也失败: {e2}")
 
         self.location_edit.setText(default_location)
-        
+
         # 注册字段
         self.registerField("word_count", self.word_count_spin)
         self.registerField("chapter_count", self.chapter_count_spin)
@@ -197,7 +283,7 @@ class ProjectSettingsPage(QWizardPage):
         self.registerField("version_control", self.version_control_check)
         self.registerField("ai_assistance", self.ai_assistance_check)
         self.registerField("location", self.location_edit)
-    
+
     def _browse_location(self):
         """浏览存储位置"""
         folder = QFileDialog.getExistingDirectory(
@@ -211,18 +297,18 @@ class ProjectSettingsPage(QWizardPage):
 
 class ProjectTemplatePage(QWizardPage):
     """项目模板页面"""
-    
+
     def __init__(self):
         super().__init__()
         self.setTitle("选择项目模板")
         self.setSubTitle("选择一个项目模板来快速开始")
-        
+
         layout = QVBoxLayout(self)
-        
+
         # 模板列表
         self.template_list = QListWidget()
         self.template_list.setMaximumHeight(200)
-        
+
         # 添加模板
         templates = [
             ("空白项目", "从零开始创建项目"),
@@ -232,41 +318,41 @@ class ProjectTemplatePage(QWizardPage):
             ("剧本", "戏剧剧本创作模板"),
             ("诗歌集", "诗歌创作模板")
         ]
-        
+
         for name, desc in templates:
             item = QListWidgetItem(f"{name}\n{desc}")
             item.setData(Qt.ItemDataRole.UserRole, name)
             self.template_list.addItem(item)
-        
+
         # 默认选择第一个
         self.template_list.setCurrentRow(0)
-        
+
         layout.addWidget(QLabel("可用模板:"))
         layout.addWidget(self.template_list)
-        
+
         # 模板预览
         preview_group = QGroupBox("模板预览")
         preview_layout = QVBoxLayout(preview_group)
-        
+
         self.preview_text = QTextEdit()
         self.preview_text.setMaximumHeight(150)
         self.preview_text.setReadOnly(True)
         self.preview_text.setText("选择一个模板查看详细信息...")
         preview_layout.addWidget(self.preview_text)
-        
+
         layout.addWidget(preview_group)
-        
+
         # 连接信号
         self.template_list.currentItemChanged.connect(self._on_template_changed)
-        
+
         # 注册字段
         self.registerField("template", self.template_list, "currentItem")
-    
+
     def _on_template_changed(self, current, previous):
         """模板选择变化"""
         if current:
             template_name = current.data(Qt.ItemDataRole.UserRole)
-            
+
             previews = {
                 "空白项目": "创建一个空白项目，你可以自由组织结构。",
                 "长篇小说": "包含以下结构：\n• 人物设定\n• 大纲\n• 第一章\n• 第二章\n• ...",
@@ -275,35 +361,35 @@ class ProjectTemplatePage(QWizardPage):
                 "剧本": "包含以下结构：\n• 人物表\n• 第一幕\n• 第二幕\n• ...",
                 "诗歌集": "包含以下结构：\n• 序言\n• 诗歌一\n• 诗歌二\n• ..."
             }
-            
+
             self.preview_text.setText(previews.get(template_name, "模板预览"))
 
 
 class ProjectSummaryPage(QWizardPage):
     """项目摘要页面"""
-    
+
     def __init__(self):
         super().__init__()
         self.setTitle("确认项目信息")
         self.setSubTitle("请确认项目信息，然后点击完成创建项目")
-        
+
         layout = QVBoxLayout(self)
-        
+
         # 摘要信息
         self.summary_text = QTextEdit()
         self.summary_text.setReadOnly(True)
         layout.addWidget(self.summary_text)
-        
+
         # 进度条
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
         layout.addWidget(self.progress_bar)
-    
+
     def initializePage(self):
         """初始化页面"""
         # 收集所有信息
         wizard = self.wizard()
-        
+
         name = wizard.field("name")
         project_type = wizard.field("type")
         author = wizard.field("author")
@@ -312,7 +398,7 @@ class ProjectSummaryPage(QWizardPage):
         word_count = wizard.field("word_count")
         chapter_count = wizard.field("chapter_count")
         location = wizard.field("location")
-        
+
         # 生成摘要
         summary = f"""
 <h3>项目摘要</h3>
@@ -338,7 +424,7 @@ class ProjectSummaryPage(QWizardPage):
 • 版本控制: {'是' if wizard.field('version_control') else '否'}
 • AI助手: {'是' if wizard.field('ai_assistance') else '否'}
         """
-        
+
         self.summary_text.setHtml(summary.strip())
 
 
@@ -368,30 +454,30 @@ class ProjectWizard(QWizard):
 
     # 信号定义
     project_created = pyqtSignal(dict)  # 项目信息
-    
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("新建项目向导")
         self.setWizardStyle(QWizard.WizardStyle.ModernStyle)
         self.resize(600, 500)
-        
+
         # 添加页面
         self.addPage(ProjectInfoPage())
         self.addPage(ProjectSettingsPage())
         self.addPage(ProjectTemplatePage())
         self.addPage(ProjectSummaryPage())
-        
+
         # 设置按钮文本
         self.setButtonText(QWizard.WizardButton.NextButton, "下一步 >")
         self.setButtonText(QWizard.WizardButton.BackButton, "< 上一步")
         self.setButtonText(QWizard.WizardButton.FinishButton, "创建项目")
         self.setButtonText(QWizard.WizardButton.CancelButton, "取消")
-        
+
         # 应用样式
         self._apply_styles()
-        
+
         logger.debug("项目创建向导初始化完成")
-    
+
     def _apply_styles(self):
         """
         应用样式 - 使用主题管理器
@@ -524,7 +610,7 @@ class ProjectWizard(QWizard):
 
         except Exception as e:
             logger.error(f"应用项目向导样式失败: {e}")
-    
+
     def accept(self):
         """完成向导"""
         try:
@@ -543,17 +629,17 @@ class ProjectWizard(QWizard):
                 "ai_assistance": self.field("ai_assistance"),
                 "template": self.field("template").data(Qt.ItemDataRole.UserRole) if self.field("template") else "空白项目"
             }
-            
+
             # 发出项目创建信号
             self.project_created.emit(project_info)
-            
+
             # 关闭向导
             super().accept()
-            
+
         except Exception as e:
             logger.error(f"创建项目失败: {e}")
             QMessageBox.critical(self, "创建失败", f"项目创建失败: {e}")
-    
+
     def get_project_type(self, type_name: str) -> ProjectType:
         """获取项目类型"""
         type_map = {

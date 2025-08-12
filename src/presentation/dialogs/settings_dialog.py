@@ -83,7 +83,6 @@ class SettingsDialog(QDialog):
         # 创建各个设置页面
         self._create_general_tab()
         self._create_editor_tab()
-        self._create_ai_tab()
         self._create_appearance_tab()
         self._create_shortcuts_tab()
         self._create_backup_tab()
@@ -166,6 +165,21 @@ class SettingsDialog(QDialog):
         
         layout.addWidget(locale_group)
 
+        # AI设置快捷入口
+        ai_group = QGroupBox("AI助手设置")
+        ai_layout = QVBoxLayout(ai_group)
+
+        ai_info = QLabel("AI助手功能需要单独配置API密钥和服务参数")
+        ai_info.setStyleSheet("color: #666; font-style: italic;")
+        ai_layout.addWidget(ai_info)
+
+        self.ai_setup_btn = QPushButton("🔧 打开AI服务设置")
+        self.ai_setup_btn.setToolTip("配置OpenAI、DeepSeek等AI服务的API密钥和参数")
+        self.ai_setup_btn.clicked.connect(self._open_ai_setup)
+        ai_layout.addWidget(self.ai_setup_btn)
+
+        layout.addWidget(ai_group)
+
         layout.addStretch()
 
         # 将内容设置到滚动区域
@@ -212,28 +226,21 @@ class SettingsDialog(QDialog):
         
         layout.addWidget(appearance_group)
         
-        # 编辑器行为
+        # 编辑器行为（仅保留已实现的功能）
         behavior_group = QGroupBox("编辑器行为")
         behavior_layout = QVBoxLayout(behavior_group)
-        
-        self.word_wrap_check = QCheckBox("自动换行")
-        behavior_layout.addWidget(self.word_wrap_check)
-        
-        self.show_line_numbers_check = QCheckBox("显示行号")
-        behavior_layout.addWidget(self.show_line_numbers_check)
-        
-        self.highlight_current_line_check = QCheckBox("高亮当前行")
-        behavior_layout.addWidget(self.highlight_current_line_check)
-        
-        self.auto_indent_check = QCheckBox("自动缩进")
-        behavior_layout.addWidget(self.auto_indent_check)
-        
-        self.smart_quotes_check = QCheckBox("智能引号")
-        behavior_layout.addWidget(self.smart_quotes_check)
-        
-        self.auto_complete_check = QCheckBox("自动完成")
-        behavior_layout.addWidget(self.auto_complete_check)
-        
+
+        # 添加说明
+        behavior_info = QLabel("注意：部分编辑器功能正在开发中，当前版本支持语法高亮和基本编辑功能")
+        behavior_info.setStyleSheet("color: #666; font-style: italic; margin-bottom: 10px;")
+        behavior_layout.addWidget(behavior_info)
+
+        # 仅保留已实现的设置
+        self.syntax_highlighting_check = QCheckBox("启用语法高亮")
+        self.syntax_highlighting_check.setChecked(True)
+        self.syntax_highlighting_check.setToolTip("为小说文本提供对话、标题等元素的高亮显示")
+        behavior_layout.addWidget(self.syntax_highlighting_check)
+
         layout.addWidget(behavior_group)
         
         # 自动保存
@@ -255,83 +262,7 @@ class SettingsDialog(QDialog):
         scroll_area.setWidget(tab)
         self.tab_widget.addTab(scroll_area, "✏️ 编辑器")
     
-    def _create_ai_tab(self):
-        """创建AI设置标签页"""
-        # 创建滚动区域
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
 
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-        layout.setContentsMargins(10, 10, 10, 10)
-        
-        # AI服务配置
-        service_group = QGroupBox("AI服务配置")
-        service_layout = QGridLayout(service_group)
-        
-        service_layout.addWidget(QLabel("默认AI提供商:"), 0, 0)
-        self.ai_provider_combo = QComboBox()
-        self.ai_provider_combo.addItems(["OpenAI", "DeepSeek", "本地模型"])
-        service_layout.addWidget(self.ai_provider_combo, 0, 1)
-        
-        service_layout.addWidget(QLabel("API密钥:"), 1, 0)
-        self.api_key_edit = QLineEdit()
-        self.api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self.api_key_edit.setPlaceholderText("输入API密钥...")
-        service_layout.addWidget(self.api_key_edit, 1, 1)
-        
-        service_layout.addWidget(QLabel("模型:"), 2, 0)
-        self.ai_model_combo = QComboBox()
-        self.ai_model_combo.addItems(["gpt-3.5-turbo", "gpt-4", "deepseek-chat"])
-        service_layout.addWidget(self.ai_model_combo, 2, 1)
-        
-        layout.addWidget(service_group)
-        
-        # AI参数
-        params_group = QGroupBox("AI参数")
-        params_layout = QGridLayout(params_group)
-        
-        params_layout.addWidget(QLabel("创造性 (Temperature):"), 0, 0)
-        self.temperature_slider = QSlider(Qt.Orientation.Horizontal)
-        self.temperature_slider.setRange(0, 200)
-        self.temperature_slider.setValue(70)
-        self.temperature_label = QLabel("0.7")
-        temp_layout = QHBoxLayout()
-        temp_layout.addWidget(self.temperature_slider)
-        temp_layout.addWidget(self.temperature_label)
-        params_layout.addLayout(temp_layout, 0, 1)
-        
-        params_layout.addWidget(QLabel("最大生成长度:"), 1, 0)
-        self.max_tokens_spin = QSpinBox()
-        self.max_tokens_spin.setRange(100, 4000)
-        self.max_tokens_spin.setValue(2000)
-        params_layout.addWidget(self.max_tokens_spin, 1, 1)
-        
-        layout.addWidget(params_group)
-        
-        # AI功能
-        features_group = QGroupBox("AI功能")
-        features_layout = QVBoxLayout(features_group)
-        
-        self.auto_suggestions_check = QCheckBox("启用自动建议")
-        features_layout.addWidget(self.auto_suggestions_check)
-        
-        self.cache_responses_check = QCheckBox("缓存AI响应")
-        features_layout.addWidget(self.cache_responses_check)
-        
-        self.show_confidence_check = QCheckBox("显示置信度")
-        features_layout.addWidget(self.show_confidence_check)
-        
-        layout.addWidget(features_group)
-
-        layout.addStretch()
-
-        # 将内容设置到滚动区域
-        scroll_area.setWidget(tab)
-        self.tab_widget.addTab(scroll_area, "🤖 AI助手")
     
     def _create_appearance_tab(self):
         """创建外观设置标签页"""
@@ -391,16 +322,14 @@ class SettingsDialog(QDialog):
         tab = QWidget()
         layout = QVBoxLayout(tab)
         
-        # 性能设置
+        # 性能设置（仅保留已实现的功能）
         performance_group = QGroupBox("性能设置")
         performance_layout = QVBoxLayout(performance_group)
-        
-        self.performance_monitoring_check = QCheckBox("启用性能监控")
-        performance_layout.addWidget(self.performance_monitoring_check)
-        
-        self.memory_optimization_check = QCheckBox("内存优化")
-        performance_layout.addWidget(self.memory_optimization_check)
-        
+
+        performance_info = QLabel("性能优化功能正在开发中，当前版本已内置基本的性能优化")
+        performance_info.setStyleSheet("color: #666; font-style: italic;")
+        performance_layout.addWidget(performance_info)
+
         layout.addWidget(performance_group)
         
         # 调试设置
@@ -417,29 +346,19 @@ class SettingsDialog(QDialog):
         
         layout.addWidget(debug_group)
         
-        # 隐私设置
-        privacy_group = QGroupBox("隐私设置")
-        privacy_layout = QVBoxLayout(privacy_group)
-        
-        self.crash_reporting_check = QCheckBox("发送崩溃报告")
-        privacy_layout.addWidget(self.crash_reporting_check)
-        
-        self.usage_analytics_check = QCheckBox("使用情况分析")
-        privacy_layout.addWidget(self.usage_analytics_check)
-        
-        self.check_updates_check = QCheckBox("检查更新")
-        privacy_layout.addWidget(self.check_updates_check)
-        
-        layout.addWidget(privacy_group)
-        
-        # 实验性功能
-        experimental_group = QGroupBox("实验性功能")
-        experimental_layout = QVBoxLayout(experimental_group)
-        
-        self.beta_features_check = QCheckBox("启用测试功能")
-        experimental_layout.addWidget(self.beta_features_check)
-        
-        layout.addWidget(experimental_group)
+        # 应用程序设置
+        app_group = QGroupBox("应用程序设置")
+        app_layout = QVBoxLayout(app_group)
+
+        self.check_updates_check = QCheckBox("启动时检查更新")
+        self.check_updates_check.setChecked(True)
+        app_layout.addWidget(self.check_updates_check)
+
+        app_info = QLabel("其他隐私和实验性功能正在开发中")
+        app_info.setStyleSheet("color: #666; font-style: italic;")
+        app_layout.addWidget(app_info)
+
+        layout.addWidget(app_group)
         
         layout.addStretch()
         self.tab_widget.addTab(tab, "⚙️ 高级")
@@ -483,11 +402,7 @@ class SettingsDialog(QDialog):
         self.line_spacing_slider.valueChanged.connect(
             lambda v: self.line_spacing_label.setText(f"{v/100:.1f}")
         )
-        
-        self.temperature_slider.valueChanged.connect(
-            lambda v: self.temperature_label.setText(f"{v/100:.1f}")
-        )
-        
+
         # 主题变化
         self.theme_combo.currentTextChanged.connect(self._on_theme_changed)
     
@@ -640,21 +555,23 @@ class SettingsDialog(QDialog):
             self.target_word_count_spin.setValue(
                 self.settings_service.get_setting("project.default_target_word_count", 80000)
             )
+            # 加载默认项目类型
+            try:
+                type_code = str(self.settings_service.get_setting("project.default_project_type", "novel")).lower()
+                code_to_label = {"novel": "小说", "essay": "散文", "poetry": "诗歌", "script": "剧本", "other": "其他"}
+                self.default_genre_combo.setCurrentText(code_to_label.get(type_code, "小说"))
+            except Exception:
+                pass
             self.auto_open_last_project_check.setChecked(
                 self.settings_service.get_auto_open_last_project()
             )
-            
+
             # 加载编辑器设置
             self.font_size_spin.setValue(
                 self.settings_service.get_setting("ui.font_size", 12)
             )
-            self.word_wrap_check.setChecked(
-                self.settings_service.get_setting("editor.word_wrap", True)
-            )
-            
-            # 加载AI设置
-            self.auto_suggestions_check.setChecked(
-                self.settings_service.get_setting("ai.auto_suggestions", True)
+            self.syntax_highlighting_check.setChecked(
+                self.settings_service.get_setting("editor.syntax_highlighting", True)
             )
             
             # 加载主题设置
@@ -672,9 +589,16 @@ class SettingsDialog(QDialog):
         try:
             # 保存常规设置
             self.settings_service.set_setting(
-                "project.default_author", 
+                "project.default_author",
                 self.default_author_edit.text()
             )
+            # 保存默认项目类型（中文到代码映射）
+            try:
+                label = self.default_genre_combo.currentText()
+                label_to_code = {"小说": "novel", "散文": "essay", "诗歌": "poetry", "剧本": "script", "其他": "other"}
+                self.settings_service.set_setting("project.default_project_type", label_to_code.get(label, "novel"))
+            except Exception:
+                pass
             self.settings_service.set_setting(
                 "project.default_target_word_count",
                 self.target_word_count_spin.value()
@@ -682,21 +606,15 @@ class SettingsDialog(QDialog):
             self.settings_service.set_auto_open_last_project(
                 self.auto_open_last_project_check.isChecked()
             )
-            
+
             # 保存编辑器设置
             self.settings_service.set_setting(
-                "ui.font_size", 
+                "ui.font_size",
                 self.font_size_spin.value()
             )
             self.settings_service.set_setting(
-                "editor.word_wrap", 
-                self.word_wrap_check.isChecked()
-            )
-            
-            # 保存AI设置
-            self.settings_service.set_setting(
-                "ai.auto_suggestions", 
-                self.auto_suggestions_check.isChecked()
+                "editor.syntax_highlighting",
+                self.syntax_highlighting_check.isChecked()
             )
             
             # 保存主题设置
@@ -725,6 +643,28 @@ class SettingsDialog(QDialog):
     def _on_theme_changed(self, theme_name: str):
         """主题变化处理"""
         self.theme_changed.emit(theme_name)
+
+    def _open_ai_setup(self):
+        """打开AI设置对话框"""
+        try:
+            from src.presentation.dialogs.ai_setup_dialog import AISetupDialog
+
+            # 获取设置服务
+            settings_service = self.settings_service
+            settings = getattr(settings_service, 'settings', None) if settings_service else None
+
+            dialog = AISetupDialog(self, settings=settings, settings_service=settings_service)
+            dialog.settings_updated.connect(self._on_ai_settings_updated)
+            dialog.exec()
+
+        except Exception as e:
+            logger.error(f"打开AI设置对话框失败: {e}")
+            QMessageBox.warning(self, "错误", f"无法打开AI设置对话框: {e}")
+
+    def _on_ai_settings_updated(self):
+        """AI设置更新处理"""
+        logger.info("AI设置已更新")
+        # 可以在这里添加其他需要的处理逻辑
     
     def _reset_to_defaults(self):
         """重置为默认设置"""

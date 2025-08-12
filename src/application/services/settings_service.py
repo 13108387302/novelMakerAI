@@ -197,6 +197,8 @@ class SettingsService(BaseConfigManager):
                 "suggestion_delay": 2000,  # 毫秒
                 "max_tokens": ai_settings.max_tokens,
                 "temperature": ai_settings.temperature,
+                "enable_streaming": getattr(ai_settings, 'enable_streaming', True),
+                "retry_count": getattr(ai_settings, 'retry_count', 3),
                 "enable_continuation": True,
                 "enable_dialogue_improvement": True,
                 "enable_scene_expansion": True,

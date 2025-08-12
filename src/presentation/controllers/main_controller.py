@@ -824,7 +824,8 @@ class MainController(QObject):
                 "description": "",
                 "author": self.settings_service.get_setting("project.default_author", ""),
                 "word_count": self.settings_service.get_setting("project.default_target_word_count", 80000),
-                "type": "novel",
+                # 使用设置的默认类型，而不是硬编码
+                "type": self.settings_service.get_setting("project.default_project_type", "novel"),
                 "template": "空白项目",
             }
             self.create_project_via_service(project_info)
@@ -1733,7 +1734,28 @@ class MainController(QObject):
             if not location:
                 raise ValueError("项目位置不能为空")
             from src.domain.entities.project import ProjectType
-            type_enum = getattr(ProjectType, proj_type.upper(), ProjectType.NOVEL)
+            # 兼容中文/英文/枚举三种输入
+            if isinstance(proj_type, ProjectType):
+                type_enum = proj_type
+            else:
+                type_str = str(proj_type).strip()
+                zh_map = {
+                    "小说": ProjectType.NOVEL,
+                    "散文": ProjectType.ESSAY,
+                    "诗歌": ProjectType.POETRY,
+                    "剧本": ProjectType.SCRIPT,
+                    "其他": ProjectType.OTHER,
+                }
+                type_enum = zh_map.get(type_str)
+                if type_enum is None:
+                    # 尝试英文枚举名/值（novel/poetry/script/essay/other/...）
+                    try:
+                        type_enum = getattr(ProjectType, type_str.upper())
+                    except Exception:
+                        try:
+                            type_enum = ProjectType(type_str.lower())
+                        except Exception:
+                            type_enum = ProjectType.NOVEL
 
             # 组合路径
             project_dir = Path(location) / name
@@ -2299,16 +2321,6 @@ class MainController(QObject):
         """项目向导完成处理"""
         try:
             logger.info(f"项目向导完成，创建项目: {project_info['name']}")
-
-            # 映射项目类型
-            type_map = {
-                "小说": ProjectType.NOVEL,
-                "散文": ProjectType.ESSAY,
-                "诗歌": ProjectType.POETRY,
-                "剧本": ProjectType.SCRIPT,
-                "其他": ProjectType.OTHER
-            }
-            project_type = type_map.get(project_info.get("type", "小说"), ProjectType.NOVEL)
 
             # 统一走集中入口，避免多套实现造成不一致
             self.create_project_via_service(project_info)

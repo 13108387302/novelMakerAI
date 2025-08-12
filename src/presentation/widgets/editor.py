@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
     QLabel, QToolBar, QFrame, QSplitter, QPushButton
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
-from PyQt6.QtGui import QFont, QTextCursor, QTextDocument, QAction
+from PyQt6.QtGui import QFont, QTextCursor, QTextDocument, QAction, QTextCharFormat, QColor, QTextFormat
 
 from src.domain.entities.document import Document, DocumentType
 from src.presentation.widgets.syntax_highlighter import NovelSyntaxHighlighter, MarkdownSyntaxHighlighter
@@ -355,22 +355,22 @@ class DocumentTab(QWidget):
         """设置UI"""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        
+
         # 文档信息栏
         info_frame = QFrame()
         info_frame.setMaximumHeight(30)
         info_frame.setStyleSheet("")  # 使用主题样式
-        
+
         info_layout = QHBoxLayout(info_frame)
         info_layout.setContentsMargins(10, 5, 10, 5)
-        
+
         # 文档标题
         self.title_label = QLabel(self.document.title)
         self.title_label.setStyleSheet("font-weight: bold;")
         info_layout.addWidget(self.title_label)
-        
+
         info_layout.addStretch()
-        
+
         # 字数统计
         self.word_count_label = QLabel("0 字")
         self.word_count_label.setStyleSheet("font-size: 10pt;")
@@ -407,7 +407,7 @@ class DocumentTab(QWidget):
         # 如果有AI助手，立即设置AI面板
         if self.ai_assistant:
             self._setup_ai_panel()
-        
+
         # 异步加载文档内容以提高响应性
         self._load_content_async()
 
@@ -652,22 +652,62 @@ class DocumentTab(QWidget):
 
         except Exception as e:
             logger.error(f"更新语法高亮主题失败: {e}")
-    
+
     def _setup_text_edit(self):
         """设置文本编辑器"""
-        # 设置字体
-        font = QFont("Microsoft YaHei UI", 12)
+        # 设置字体（读取设置）
+        try:
+            from src.shared.ioc.container import get_global_container
+            container = get_global_container()
+            ss = None
+            if container is not None:
+                try:
+                    from src.application.services.settings_service import SettingsService
+                    ss = container.try_get(SettingsService)
+                except Exception:
+                    ss = None
+            font_family = "Microsoft YaHei UI"
+            font_size = 12
+            if ss is not None:
+                font_family = ss.get_setting("ui.font_family", font_family)
+                font_size = int(ss.get_setting("ui.font_size", font_size))
+            font = QFont(font_family, font_size)
+        except Exception:
+            font = QFont("Microsoft YaHei UI", 12)
         self.text_edit.setFont(font)
 
         # 设置行间距（通过文档格式）
         from PyQt6.QtGui import QTextBlockFormat
+        # 当前行高亮由 _on_cursor_position_changed 动态维护，此处不做一次性设置，避免重复
+        try:
+            self.text_edit.setExtraSelections([])
+        except Exception:
+            pass
+
         block_format = QTextBlockFormat()
         # 使用整数值：0=SingleHeight, 1=ProportionalHeight, 2=FixedHeight
         block_format.setLineHeight(150, 1)  # 150% 行高，类型1表示比例高度
         cursor = self.text_edit.textCursor()
         cursor.select(cursor.SelectionType.Document)
         cursor.mergeBlockFormat(block_format)
-        
+
+        # 自动换行设置
+        try:
+            from src.shared.ioc.container import get_global_container
+            container = get_global_container()
+            wrap_enabled = True
+            if container is not None:
+                try:
+                    from src.application.services.settings_service import SettingsService
+                    ss = container.try_get(SettingsService)
+                except Exception:
+                    ss = None
+                if ss is not None:
+                    wrap_enabled = bool(ss.get_setting("editor.word_wrap", True))
+            self.text_edit.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth if wrap_enabled else QTextEdit.LineWrapMode.NoWrap)
+        except Exception:
+            self.text_edit.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
+
         # 设置样式 - 使用主题颜色
         self.text_edit.setStyleSheet("""
             QTextEdit {
@@ -680,19 +720,19 @@ class DocumentTab(QWidget):
                 outline: none;
             }
         """)
-        
+
         # 设置占位符
         self.text_edit.setPlaceholderText("开始你的创作...")
-        
+
         # 启用拼写检查（如果可用）
         self.text_edit.setAcceptRichText(False)  # 纯文本模式
-    
+
     def _setup_connections(self):
         """设置信号连接"""
         self.text_edit.textChanged.connect(self._on_text_changed)
         self.text_edit.cursorPositionChanged.connect(self._on_cursor_position_changed)
         self.text_edit.selectionChanged.connect(self._on_selection_changed)
-    
+
     def _on_text_changed(self):
         """文本变更处理"""
         try:
@@ -721,9 +761,25 @@ class DocumentTab(QWidget):
                     # 回退到原有方法
                     self.ai_panel.set_context(content, selected_text)
 
-            # 启动自动保存定时器
-            self.auto_save_timer.start(2000)  # 2秒后自动保存
-            logger.debug(f"自动保存定时器已启动: {self.document.title}")
+            # 启动自动保存定时器（读取 ui.auto_save_interval，单位秒）
+            try:
+                from src.shared.ioc.container import get_global_container
+                container = get_global_container()
+                interval_ms = 2000
+                if container is not None:
+                    try:
+                        from src.application.services.settings_service import SettingsService
+                        ss = container.try_get(SettingsService)
+                    except Exception:
+                        ss = None
+                    if ss is not None:
+                        interval_sec = int(ss.get_setting("ui.auto_save_interval", 30))
+                        interval_ms = max(1000, interval_sec * 1000)
+                self.auto_save_timer.start(interval_ms)
+                logger.debug(f"自动保存定时器已启动: {self.document.title}, {interval_ms}ms")
+            except Exception:
+                self.auto_save_timer.start(2000)
+                logger.debug(f"自动保存定时器已启动: {self.document.title}")
 
         except Exception as e:
             logger.error(f"处理文本变更失败: {e}")
@@ -762,6 +818,31 @@ class DocumentTab(QWidget):
             if self.ai_panel and hasattr(self.ai_panel, 'update_cursor_position'):
                 self.ai_panel.update_cursor_position(position)
 
+            # 动态更新当前行高亮
+            try:
+                from src.shared.ioc.container import get_global_container
+                container = get_global_container()
+                highlight_enabled = True
+                if container is not None:
+                    try:
+                        from src.application.services.settings_service import SettingsService
+                        ss = container.try_get(SettingsService)
+                    except Exception:
+                        ss = None
+                    if ss is not None:
+                        highlight_enabled = bool(ss.get_setting("editor.highlight_current_line", True))
+                if highlight_enabled:
+                    selection = QTextEdit.ExtraSelection()
+                    lineColor = QColor(Qt.GlobalColor.yellow).lighter(190)
+                    selection.format.setBackground(lineColor)
+                    selection.format.setProperty(QTextFormat.Property.FullWidthSelection, True)
+                    selection.cursor = self.text_edit.textCursor()
+                    self.text_edit.setExtraSelections([selection])
+                else:
+                    self.text_edit.setExtraSelections([])
+            except Exception:
+                pass
+
         except Exception as e:
             logger.error(f"处理光标位置变化失败: {e}")
 
@@ -769,22 +850,22 @@ class DocumentTab(QWidget):
         """更新字数统计"""
         try:
             content = self.text_edit.toPlainText()
-            
+
             # 计算字数（中文字符 + 英文单词）
             chinese_chars = len([c for c in content if '\u4e00' <= c <= '\u9fff'])
             english_words = len([w for w in content.split() if w.strip() and any(c.isalpha() for c in w)])
-            
+
             total_words = chinese_chars + english_words
-            
+
             # 更新显示
             self.word_count_label.setText(f"{total_words} 字")
-            
+
             # 发出字数变更信号
             self.word_count_changed.emit(total_words)
-            
+
         except Exception as e:
             logger.error(f"更新字数统计失败: {e}")
-    
+
     def _auto_save(self):
         """自动保存"""
         try:
@@ -842,11 +923,11 @@ class DocumentTab(QWidget):
         except Exception as e:
             logger.error(f"检查修改状态失败: {e}")
             return False
-    
+
     def get_content(self) -> str:
         """获取内容"""
         return self.text_edit.toPlainText()
-    
+
     @ensure_main_thread
     def set_content(self, content: str):
         """设置内容（强制主线程）"""
@@ -863,7 +944,7 @@ class DocumentTab(QWidget):
     def get_selected_text(self) -> str:
         """获取选中的文本"""
         return self.text_edit.textCursor().selectedText()
-    
+
     @ensure_main_thread
     def replace_selected_text(self, text: str):
         """替换选中的文本（强制主线程）"""
@@ -874,27 +955,27 @@ class DocumentTab(QWidget):
     def undo(self):
         """撤销"""
         self.text_edit.undo()
-    
+
     def redo(self):
         """重做"""
         self.text_edit.redo()
-    
+
     def copy(self):
         """复制"""
         self.text_edit.copy()
-    
+
     def cut(self):
         """剪切"""
         self.text_edit.cut()
-    
+
     def paste(self):
         """粘贴"""
         self.text_edit.paste()
-    
+
     def select_all(self):
         """全选"""
         self.text_edit.selectAll()
-    
+
     def find_text(self, text: str, case_sensitive: bool = False, whole_word: bool = False, backward: bool = False) -> bool:
         """查找文本"""
         # PyQt6 使用 QTextDocument.FindFlag
@@ -999,33 +1080,33 @@ class EditorWidget(QWidget):
         self._document_tabs: dict[str, DocumentTab] = {}
 
         logger.debug("编辑器组件初始化完成")
-    
+
     def _setup_ui(self):
         """设置UI"""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        
+
         # 工具栏
         self.toolbar = QToolBar()
         # 工具栏使用主题样式
         self.toolbar.setStyleSheet("")
-        
+
         # 添加工具栏按钮
         self._create_toolbar_actions()
         layout.addWidget(self.toolbar)
-        
+
         # 标签页组件
         self.tab_widget = QTabWidget()
         self.tab_widget.setTabsClosable(True)
         self.tab_widget.setMovable(True)
         # 标签页使用主题样式
         self.tab_widget.setStyleSheet("")
-        
+
         layout.addWidget(self.tab_widget)
-        
+
         # 欢迎页面
         self._create_welcome_page()
-    
+
     def _create_toolbar_actions(self):
         """创建工具栏动作"""
         # 撤销
@@ -1033,41 +1114,41 @@ class EditorWidget(QWidget):
         undo_action.setShortcut("Ctrl+Z")
         undo_action.triggered.connect(self.undo)
         self.toolbar.addAction(undo_action)
-        
+
         # 重做
         redo_action = QAction("重做", self)
         redo_action.setShortcut("Ctrl+Y")
         redo_action.triggered.connect(self.redo)
         self.toolbar.addAction(redo_action)
-        
+
         self.toolbar.addSeparator()
-        
+
         # 复制
         copy_action = QAction("复制", self)
         copy_action.setShortcut("Ctrl+C")
         copy_action.triggered.connect(self.copy)
         self.toolbar.addAction(copy_action)
-        
+
         # 剪切
         cut_action = QAction("剪切", self)
         cut_action.setShortcut("Ctrl+X")
         cut_action.triggered.connect(self.cut)
         self.toolbar.addAction(cut_action)
-        
+
         # 粘贴
         paste_action = QAction("粘贴", self)
         paste_action.setShortcut("Ctrl+V")
         paste_action.triggered.connect(self.paste)
         self.toolbar.addAction(paste_action)
-        
+
         self.toolbar.addSeparator()
-        
+
         # 查找
         find_action = QAction("查找", self)
         find_action.setShortcut("Ctrl+F")
         find_action.triggered.connect(self.show_find_dialog)
         self.toolbar.addAction(find_action)
-    
+
     def _create_welcome_page(self):
         """创建欢迎页面"""
         welcome_widget = QWidget()
@@ -1145,7 +1226,7 @@ class EditorWidget(QWidget):
         """设置信号连接"""
         self.tab_widget.tabCloseRequested.connect(self._close_tab)
         self.tab_widget.currentChanged.connect(self._on_tab_changed)
-    
+
     def load_document(self, document: Document):
         """加载文档（优化版本）"""
         try:
@@ -1221,7 +1302,7 @@ class EditorWidget(QWidget):
 
         except Exception as e:
             logger.error(f"❌ 异步AI助手创建失败: {e}")
-    
+
     def _close_tab(self, index: int):
         """关闭标签页"""
         try:
@@ -1238,10 +1319,10 @@ class EditorWidget(QWidget):
                     logger.info(f"移除文档 {document_id} 的AI助手")
 
                 logger.info(f"文档标签页已关闭: {widget.document.title}")
-            
+
             # 移除标签页
             self.tab_widget.removeTab(index)
-            
+
             # 如果没有文档了，显示欢迎页面
             if len(self._document_tabs) == 0:
                 self._create_welcome_page()
@@ -1311,10 +1392,10 @@ class EditorWidget(QWidget):
             widget = self.tab_widget.widget(index)
             if isinstance(widget, DocumentTab):
                 self.document_switched.emit(widget.document.id)
-                
+
         except Exception as e:
             logger.error(f"处理标签页切换失败: {e}")
-    
+
     def get_current_tab(self) -> Optional[DocumentTab]:
         """获取当前标签页"""
         current_widget = self.tab_widget.currentWidget()
@@ -1343,31 +1424,31 @@ class EditorWidget(QWidget):
         tab = self.get_current_tab()
         if tab:
             tab.undo()
-    
+
     def redo(self):
         """重做"""
         tab = self.get_current_tab()
         if tab:
             tab.redo()
-    
+
     def copy(self):
         """复制"""
         tab = self.get_current_tab()
         if tab:
             tab.copy()
-    
+
     def cut(self):
         """剪切"""
         tab = self.get_current_tab()
         if tab:
             tab.cut()
-    
+
     def paste(self):
         """粘贴"""
         tab = self.get_current_tab()
         if tab:
             tab.paste()
-    
+
     def show_find_dialog(self):
         """显示查找对话框"""
         try:
@@ -1465,20 +1546,20 @@ class EditorWidget(QWidget):
 
         except Exception as e:
             logger.error(f"显示查找对话框失败: {e}")
-    
+
     def insert_text(self, text: str):
         """插入文本到当前文档"""
         tab = self.get_current_tab()
         if tab:
             tab.insert_text(text)
-    
+
     def get_selected_text(self) -> str:
         """获取当前选中的文本"""
         tab = self.get_current_tab()
         if tab:
             return tab.get_selected_text()
         return ""
-    
+
     def replace_selected_text(self, text: str):
         """替换当前选中的文本"""
         tab = self.get_current_tab()

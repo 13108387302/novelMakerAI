@@ -64,7 +64,7 @@ class ProjectService(BaseService):
         self.project_repository = project_repository
         self.event_publisher = EventPublisher(event_bus)
         self._current_project: Optional[Project] = None
-    
+
     async def create_project(
         self,
         name: str,
@@ -102,11 +102,31 @@ class ProjectService(BaseService):
             Exception: 项目创建或保存失败时抛出
         """
         try:
+            # 应用设置中的默认作者与默认体裁（当未显式提供时）
+            effective_author = author
+            default_genre = ""
+            try:
+                from src.shared.ioc.container import get_global_container
+                container = get_global_container()
+                if container is not None:
+                    try:
+                        from src.application.services.settings_service import SettingsService
+                        ss = container.try_get(SettingsService)
+                    except Exception:
+                        ss = None
+                    if ss is not None:
+                        if not effective_author:
+                            effective_author = ss.get_setting("project.default_author", "")
+                        default_genre = ss.get_setting("project.default_genre", "")
+            except Exception:
+                pass
+
             # 创建项目元数据
             metadata = ProjectMetadata(
                 title=name,
                 description=description,
-                author=author,
+                author=effective_author,
+                genre=default_genre or "",
                 target_word_count=target_word_count
             )
 
@@ -139,7 +159,7 @@ class ProjectService(BaseService):
                     subdir_path = project.root_path / subdir
                     subdir_path.mkdir(exist_ok=True)
                     logger.debug(f"子目录已创建: {subdir_path}")
-            
+
             # 保存项目
             saved_project = await self.project_repository.save(project)
             if saved_project:
@@ -160,11 +180,11 @@ class ProjectService(BaseService):
             else:
                 logger.error(f"项目保存失败: {name}")
                 return None
-                
+
         except Exception as e:
             logger.error(f"创建项目失败: {e}")
             return None
-    
+
     async def open_project(self, project_id: str) -> Optional[Project]:
         """打开项目"""
         try:
@@ -198,7 +218,7 @@ class ProjectService(BaseService):
         except Exception as e:
             logger.error(f"打开项目失败: {project_id}, 错误: {e}")
             return None
-    
+
     async def open_project_by_path(self, project_path: Path) -> Optional[Project]:
         """根据路径打开项目"""
         try:
@@ -225,32 +245,32 @@ class ProjectService(BaseService):
         except Exception as e:
             logger.error(f"根据路径打开项目失败: {project_path}, 错误: {e}")
             return None
-    
+
     async def close_project(self) -> bool:
         """关闭当前项目"""
         try:
             if self._current_project:
                 # 保存项目
                 await self.save_current_project()
-                
+
                 # 发布项目关闭事件
                 event = ProjectClosedEvent(
                     project_id=self._current_project.id,
                     project_name=self._current_project.title
                 )
                 await self.event_publisher.publish_safe(event, "项目关闭")
-                
+
                 logger.info(f"项目关闭: {self._current_project.title}")
                 self._current_project = None
                 return True
             else:
                 logger.warning("没有打开的项目")
                 return False
-                
+
         except Exception as e:
             logger.error(f"关闭项目失败: {e}")
             return False
-    
+
     async def save_current_project(self) -> bool:
         """保存当前项目"""
         try:
@@ -264,7 +284,7 @@ class ProjectService(BaseService):
                         save_path=str(self._current_project.root_path) if self._current_project.root_path else ""
                     )
                     await self.event_publisher.publish_safe(event, "项目保存")
-                    
+
                     logger.info(f"项目保存成功: {self._current_project.title}")
                     return True
                 else:
@@ -273,11 +293,11 @@ class ProjectService(BaseService):
             else:
                 logger.warning("没有打开的项目")
                 return False
-                
+
         except Exception as e:
             logger.error(f"保存项目失败: {e}")
             return False
-    
+
     async def delete_project(self, project_id: str) -> bool:
         """删除项目"""
         try:
@@ -299,40 +319,40 @@ class ProjectService(BaseService):
         except Exception as e:
             logger.error(f"删除项目失败: {e}")
             return False
-    
+
     async def list_all_projects(self) -> List[Project]:
         """列出所有项目"""
         try:
             projects = await self.project_repository.list_all()
             logger.info(f"获取项目列表成功，共 {len(projects)} 个项目")
             return projects
-            
+
         except Exception as e:
             logger.error(f"获取项目列表失败: {e}")
             return []
-    
+
     async def get_recent_projects(self, limit: int = DEFAULT_RECENT_PROJECTS_LIMIT) -> List[Project]:
         """获取最近的项目"""
         try:
             projects = await self.project_repository.get_recent_projects(limit)
             logger.info(f"获取最近项目成功，共 {len(projects)} 个项目")
             return projects
-            
+
         except Exception as e:
             logger.error(f"获取最近项目失败: {e}")
             return []
-    
+
     async def search_projects(self, query: str) -> List[Project]:
         """搜索项目"""
         try:
             projects = await self.project_repository.search(query)
             logger.info(f"项目搜索完成，找到 {len(projects)} 个结果")
             return projects
-            
+
         except Exception as e:
             logger.error(f"搜索项目失败: {e}")
             return []
-    
+
     async def update_project_metadata(
         self,
         project_id: str,
@@ -347,7 +367,7 @@ class ProjectService(BaseService):
             if not project:
                 logger.warning(f"项目不存在: {project_id}")
                 return False
-            
+
             # 更新元数据
             if title is not None:
                 project.title = title
@@ -357,24 +377,24 @@ class ProjectService(BaseService):
                 project.metadata.author = author
             if target_word_count is not None:
                 project.metadata.target_word_count = target_word_count
-            
+
             # 保存更新
             success = await self.project_repository.save(project)
             if success:
                 # 如果是当前项目，更新引用
                 if self._current_project and self._current_project.id == project_id:
                     self._current_project = project
-                
+
                 logger.info(f"项目元数据更新成功: {project_id}")
                 return True
             else:
                 logger.error(f"项目元数据更新失败: {project_id}")
                 return False
-                
+
         except Exception as e:
             logger.error(f"更新项目元数据失败: {e}")
             return False
-    
+
     async def create_project_backup(self, project_id: str, backup_path: Path) -> bool:
         """创建项目备份"""
         try:
@@ -385,11 +405,11 @@ class ProjectService(BaseService):
             else:
                 logger.error(f"项目备份创建失败: {project_id}")
                 return False
-                
+
         except Exception as e:
             logger.error(f"创建项目备份失败: {e}")
             return False
-    
+
     async def export_project(
         self,
         project_id: str,
@@ -407,11 +427,11 @@ class ProjectService(BaseService):
             else:
                 logger.error(f"项目导出失败: {project_id}")
                 return False
-                
+
         except Exception as e:
             logger.error(f"导出项目失败: {e}")
             return False
-    
+
     async def import_project(
         self,
         import_path: Path,
@@ -426,11 +446,11 @@ class ProjectService(BaseService):
             else:
                 logger.error(f"项目导入失败: {import_path}")
                 return None
-                
+
         except Exception as e:
             logger.error(f"导入项目失败: {e}")
             return None
-    
+
     @property
     def current_project(self) -> Optional[Project]:
         """当前项目"""

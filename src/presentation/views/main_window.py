@@ -390,6 +390,31 @@ class MainWindow(QMainWindow):
                 except Exception as e:
                     logger.warning(f"恢复窗口几何失败: {e}")
 
+
+            # 若未能恢复有效几何，则使用默认尺寸
+            try:
+                if not geometry:
+                    from config.settings import Settings
+                    # 从容器或全局上下文读取设置，若不可用则使用常量
+                    default_w = DEFAULT_WINDOW_WIDTH
+                    default_h = DEFAULT_WINDOW_HEIGHT
+                    try:
+                        from src.shared.ioc.container import get_global_container
+                        container = get_global_container()
+                        if container is not None:
+                            try:
+                                settings = container.try_get(Settings)
+                                if settings and getattr(settings, 'ui', None):
+                                    default_w = int(getattr(settings.ui, 'window_width', default_w))
+                                    default_h = int(getattr(settings.ui, 'window_height', default_h))
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+                    self.resize(default_w, default_h)
+            except Exception as e:
+                logger.warning(f"应用默认窗口尺寸失败: {e}")
+
             # 恢复停靠窗口状态
             dock_state = settings.get_dock_state()
             if dock_state:

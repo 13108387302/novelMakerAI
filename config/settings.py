@@ -99,12 +99,12 @@ class AIServiceSettings(BaseConfigSettings):
     openai_api_key: Optional[str] = Field(default=None, description="OpenAI API密钥")
     openai_base_url: str = Field(default="https://api.openai.com/v1", description="OpenAI API基础URL")
     openai_model: str = Field(default="gpt-3.5-turbo", description="OpenAI默认模型")
-    
+
     # DeepSeek配置
     deepseek_api_key: Optional[str] = Field(default=None, description="DeepSeek API密钥")
     deepseek_base_url: str = Field(default="https://api.deepseek.com/v1", description="DeepSeek API基础URL")
     deepseek_model: str = Field(default="deepseek-chat", description="DeepSeek默认模型")
-    
+
     # 通用AI配置
     default_provider: str = Field(default="deepseek", description="默认AI服务提供商")
     max_tokens: int = Field(default=2000, description="最大生成token数")
@@ -114,7 +114,7 @@ class AIServiceSettings(BaseConfigSettings):
 
     # 输出配置
     enable_streaming: bool = Field(default=True, description="是否启用流式输出")
-    
+
     @field_validator('default_provider')
     @classmethod
     def validate_provider(cls, v):
@@ -186,7 +186,7 @@ class UISettings(BaseConfigSettings):
     window_height: int = Field(default=900, description="窗口高度")
     auto_save_interval: int = Field(default=30, description="自动保存间隔(秒)")
     recent_projects_count: int = Field(default=10, description="最近项目数量")
-    
+
     @field_validator('theme')
     @classmethod
     def validate_theme(cls, v):
@@ -309,14 +309,14 @@ class Settings(BaseSettings):
     def log_dir(self) -> Path:
         """日志目录"""
         return self.data_dir / "logs"
-    
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
         env_nested_delimiter = "__"
         case_sensitive = False
         extra = "allow"
-    
+
     def __init__(self, **kwargs):
         """
         初始化Settings配置实例
@@ -399,7 +399,7 @@ class Settings(BaseSettings):
 
         except Exception as e:
             raise IOError(f"保存配置文件失败: {e}") from e
-    
+
     @classmethod
     def load_from_file(cls, file_path: Path) -> 'Settings':
         """从文件加载配置"""
@@ -429,11 +429,11 @@ class Settings(BaseSettings):
             # 其他错误，也返回默认配置
             print(f"警告：加载配置文件失败 ({e})，使用默认配置")
             return cls()
-    
+
     def get_ai_config(self, provider: str = None) -> Dict[str, Any]:
         """获取AI服务配置"""
         provider = provider or self.ai_service.default_provider
-        
+
         if provider == OPENAI_PROVIDER:
             return {
                 "api_key": self.ai_service.openai_api_key,
@@ -454,20 +454,20 @@ class Settings(BaseSettings):
             }
         else:
             raise ValueError(f"Unsupported AI provider: {provider}")
-    
+
     def validate_ai_config(self) -> List[str]:
         """验证AI配置"""
         errors = []
-        
+
         if not self.ai_service.openai_api_key and not self.ai_service.deepseek_api_key:
             errors.append("至少需要配置一个AI服务的API密钥")
-        
+
         if self.ai_service.default_provider == OPENAI_PROVIDER and not self.ai_service.openai_api_key:
             errors.append("默认使用OpenAI但未配置API密钥")
-        
+
         if self.ai_service.default_provider == DEEPSEEK_PROVIDER and not self.ai_service.deepseek_api_key:
             errors.append("默认使用DeepSeek但未配置API密钥")
-        
+
         return errors
 
 
@@ -514,6 +514,26 @@ def get_settings_for_project(project_root: Path) -> Settings:
 
     _project_settings_cache[key] = settings
     return settings
+
+
+def reload_settings_for_project(project_root: Path) -> Settings:
+    """强制从项目内配置文件重新加载 Settings（绕过缓存）。"""
+    global _project_settings_cache
+    try:
+        root = Path(project_root).resolve()
+        key = str(root)
+        # 丢弃缓存
+        if key in _project_settings_cache:
+            try:
+                del _project_settings_cache[key]
+            except Exception:
+                _project_settings_cache.pop(key, None)
+        # 重新加载
+        return get_settings_for_project(root)
+    except Exception as e:
+        print(f"⚠️ 重新加载项目配置失败，返回当前默认设置: {e}")
+        return get_settings_for_project(project_root)
+
 
 
 def db_url_for_project(project_root: Path) -> str:

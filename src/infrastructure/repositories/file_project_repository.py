@@ -773,6 +773,23 @@ class FileProjectRepository(BaseFileRepository[Project], IProjectRepository):
                 project.metadata.title = template_meta.get("title", "").replace("{{PROJECT_TITLE}}", project_name)
                 project.metadata.author = template_meta.get("author", "").replace("{{AUTHOR}}", "")
                 project.metadata.genre = template_meta.get("genre", "")
+                # 如果模板未提供作者/体裁，使用设置中的默认值
+                try:
+                    from src.shared.ioc.container import get_global_container
+                    container = get_global_container()
+                    if container is not None:
+                        try:
+                            from src.application.services.settings_service import SettingsService
+                            ss = container.try_get(SettingsService)
+                        except Exception:
+                            ss = None
+                        if ss is not None:
+                            if not project.metadata.author:
+                                project.metadata.author = ss.get_setting("project.default_author", "") or project.metadata.author
+                            if not project.metadata.genre:
+                                project.metadata.genre = ss.get_setting("project.default_genre", "") or project.metadata.genre
+                except Exception:
+                    pass
                 project.metadata.target_word_count = template_meta.get("target_word_count", 50000)
                 project.metadata.tags = template_meta.get("tags", [])
                 project.metadata.themes = template_meta.get("themes", [])
