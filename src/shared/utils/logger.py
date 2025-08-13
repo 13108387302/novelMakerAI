@@ -101,6 +101,42 @@ class ColoredFormatter(logging.Formatter):
         return super().format(record)
 
 
+class ThemeConsoleFilter(logging.Filter):
+    """控制台主题相关日志过滤器
+
+    当环境变量 THEME_LOGS_ONLY 为 1/true 时，仅放行：
+    - __main__ 中包含 "[Theme]" 的日志
+    - src.presentation.styles.theme_manager 的日志
+    - src.presentation.views.startup_window 的日志
+    - 任意模块的 ERROR/CRITICAL 级别（防止隐藏错误）
+    否则不过滤（放行全部）。
+    """
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            flag = os.environ.get("THEME_LOGS_ONLY", "").strip().lower()
+            if flag not in ("1", "true", "yes", "on"):
+                return True
+
+            # 始终放行错误级别
+            if record.levelno >= logging.ERROR:
+                return True
+
+            name = record.name or ""
+            msg = record.getMessage() if hasattr(record, 'getMessage') else record.msg
+
+            if name.startswith("src.presentation.styles.theme_manager"):
+                return True
+            if name.startswith("src.presentation.views.startup_window"):
+                return True
+            if name.startswith("__main__") and isinstance(msg, str) and "[Theme]" in msg:
+                return True
+
+            return False
+        except Exception:
+            # 异常时不过滤
+            return True
+
+
 def setup_logging(settings: Optional[Any] = None) -> None:
     """
     设置日志系统
@@ -135,7 +171,29 @@ def setup_logging(settings: Optional[Any] = None) -> None:
 
     # 控制台处理器
     console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(getattr(logging, log_level))
+    # 控制台级别：
+    # 1) 若设置 CONSOLE_MIN_LEVEL，则使用该级别；
+    # 2) 否则若 THEME_LOGS_ONLY/HIDE_INFO 开启，则提升到 WARNING；
+    # 3) 默认使用全局 log_level。
+    try:
+        console_level_env = os.environ.get("CONSOLE_MIN_LEVEL", "").strip().upper()
+        truthy = {"1", "true", "yes", "on"}
+        if console_level_env:
+            console_level = getattr(logging, console_level_env, logging.WARNING)
+        elif os.environ.get("THEME_LOGS_ONLY", "").strip().lower() in truthy or \
+             os.environ.get("HIDE_INFO", "").strip().lower() in truthy:
+            console_level = logging.WARNING
+        else:
+            console_level = getattr(logging, log_level)
+        console_handler.setLevel(console_level)
+    except Exception:
+        console_handler.setLevel(logging.WARNING)
+
+    # 根据环境变量注入过滤器：只输出主题相关日志
+    try:
+        console_handler.addFilter(ThemeConsoleFilter())
+    except Exception:
+        pass
 
     # 控制台格式化器（带颜色）
     console_formatter = ColoredFormatter(

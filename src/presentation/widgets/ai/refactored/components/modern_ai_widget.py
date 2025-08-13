@@ -120,8 +120,8 @@ class ModernAIWidget(QWidget):
         self.main_layout.addWidget(self.scroll_area)
 
     def _apply_modern_styles(self):
-        """应用现代化样式"""
-        self.setStyleSheet(get_complete_ai_style())
+        """交由 ThemeManager 的全局样式控制，避免面板覆盖主题"""
+        return
 
     def _get_setting(self, key: str, default=None):
         try:
@@ -207,9 +207,10 @@ class ModernAIWidget(QWidget):
         button.setToolTip(tooltip or text)
         button.setCursor(Qt.CursorShape.PointingHandCursor)
 
-        # 设置按钮样式
-        if style_type in SPECIAL_BUTTON_STYLES:
-            button.setStyleSheet(SPECIAL_BUTTON_STYLES[style_type])
+        # 使用主题强调样式，移除内联QSS
+        if style_type and style_type != "default":
+            button.setProperty("accent", True)
+            button.setStyleSheet("")
 
         # 连接回调
         if callback:
@@ -259,7 +260,7 @@ class ModernAIWidget(QWidget):
     def create_context_source_badge(self) -> QLabel:
         """创建上下文来源提示徽章"""
         label = QLabel("上下文来源: 未知")
-        label.setStyleSheet("color:#718096;font-size:12px;padding:2px 6px;border-radius:4px;background:#F1F5F9;")
+        # 颜色与背景交由主题
         # 连接信号
         try:
             self.context_source_changed.connect(lambda src: label.setText(f"上下文来源: {src}"))
@@ -352,7 +353,7 @@ class ModernAIWidget(QWidget):
         self.apply_append_btn = QPushButton("追加到文尾")
         for b in (self.apply_insert_btn, self.apply_replace_btn, self.apply_append_btn):
             b.setCursor(Qt.CursorShape.PointingHandCursor)
-            b.setStyleSheet("padding:6px 10px;")
+            # 按钮样式交由主题
         layout.addWidget(self.apply_insert_btn)
         layout.addWidget(self.apply_replace_btn)
         layout.addWidget(self.apply_append_btn)
@@ -376,7 +377,7 @@ class ModernAIWidget(QWidget):
 
         # 撤销提示标签（临时显示）
         self.undo_hint = QLabel("")
-        self.undo_hint.setStyleSheet("color:#718096;font-size:12px;")
+        # 文字样式交由主题
         layout.addWidget(self.undo_hint)
 
         # 连接点击行为 -> 发出写回信号
@@ -492,14 +493,7 @@ class ModernAIWidget(QWidget):
         # 设置聊天历史样式
         font = QFont("Microsoft YaHei UI", 10)
         self.chat_history.setFont(font)
-        self.chat_history.setStyleSheet("""
-            QTextEdit {
-                background-color: #f8f9fa;
-                border: 1px solid #e9ecef;
-                border-radius: 8px;
-                padding: 8px;
-            }
-        """)
+        # 外观交由主题
 
         chat_layout.addWidget(self.chat_history)
 
@@ -512,56 +506,19 @@ class ModernAIWidget(QWidget):
         self.chat_input.setMaximumHeight(80)
         self.chat_input.setPlaceholderText("在这里输入您的问题...")
         self.chat_input.setFont(font)
-        self.chat_input.setStyleSheet("""
-            QTextEdit {
-                border: 2px solid #dee2e6;
-                border-radius: 8px;
-                padding: 8px;
-                background-color: white;
-            }
-            QTextEdit:focus {
-                border-color: #007bff;
-            }
-        """)
+        # 外观交由主题
 
         # 创建发送按钮
         self.send_button = QPushButton("发送")
         self.send_button.setMinimumSize(80, 40)
-        self.send_button.setStyleSheet("""
-            QPushButton {
-                background-color: #007bff;
-                color: white;
-                border: none;
-                border-radius: 8px;
-                font-weight: bold;
-                font-size: 12px;
-            }
-            QPushButton:hover {
-                background-color: #0056b3;
-            }
-            QPushButton:pressed {
-                background-color: #004085;
-            }
-            QPushButton:disabled {
-                background-color: #6c757d;
-            }
-        """)
+        self.send_button.setProperty("accent", True)
+        self.send_button.setStyleSheet("")
 
         # 创建清空按钮
         self.clear_chat_button = QPushButton("清空")
         self.clear_chat_button.setMinimumSize(60, 40)
-        self.clear_chat_button.setStyleSheet("""
-            QPushButton {
-                background-color: #6c757d;
-                color: white;
-                border: none;
-                border-radius: 8px;
-                font-size: 12px;
-            }
-            QPushButton:hover {
-                background-color: #545b62;
-            }
-        """)
+        # 外观由主题控制
+        self.clear_chat_button.setStyleSheet("")
 
         input_layout.addWidget(self.chat_input)
         input_layout.addWidget(self.send_button)

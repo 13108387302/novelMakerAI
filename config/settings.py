@@ -11,13 +11,30 @@ import os
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 
-# 配置文件常量
+# 配置文件常量（全局唯一配置原则）
 CONFIG_DIR_NAME = ".novel_editor"
 CONFIG_FILE_NAME = "config.json"
 TEMP_FILE_SUFFIX = ".tmp"
 DEFAULT_ENCODING = "utf-8"
 OPENAI_PROVIDER = "openai"
 DEEPSEEK_PROVIDER = "deepseek"
+
+# 全局配置路径（应用级别，非项目级别）
+def get_global_config_dir() -> Path:
+    """返回全局配置目录（用户主目录下 .novel_editor）。"""
+    try:
+        home = Path.home()
+    except Exception:
+        # 极端环境回退到当前工作目录
+        home = Path.cwd()
+    return (home / CONFIG_DIR_NAME).resolve()
+
+
+def get_global_config_path() -> Path:
+    """返回全局配置文件路径。"""
+    d = get_global_config_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    return d / CONFIG_FILE_NAME
 
 try:
     # 尝试导入新版本的pydantic-settings
@@ -73,7 +90,7 @@ class DatabaseSettings(BaseConfigSettings):
     max_overflow: int = Field(default=20, description="连接池最大溢出")
 
     class Config:
-        env_prefix = "DB_"
+        env_prefix = "DISABLED_"  # 禁用环境变量前缀
 
 
 class AIServiceSettings(BaseConfigSettings):
@@ -152,7 +169,7 @@ class AIServiceSettings(BaseConfigSettings):
         return v
 
     class Config:
-        env_prefix = "AI_"
+        env_prefix = "DISABLED_"  # 禁用环境变量前缀
 
 
 class UISettings(BaseConfigSettings):
@@ -203,7 +220,7 @@ class UISettings(BaseConfigSettings):
         return v
 
     class Config:
-        env_prefix = "UI_"
+        env_prefix = "DISABLED_"  # 禁用环境变量前缀
 
 
 class LoggingSettings(BaseConfigSettings):
@@ -226,7 +243,7 @@ class LoggingSettings(BaseConfigSettings):
         return v.upper()
 
     class Config:
-        env_prefix = "LOG_"
+        env_prefix = "DISABLED_"  # 禁用环境变量前缀
 
 
 class PluginSettings(BaseConfigSettings):
@@ -236,7 +253,7 @@ class PluginSettings(BaseConfigSettings):
     auto_load_plugins: bool = Field(default=True, description="是否自动加载插件")
 
     class Config:
-        env_prefix = "PLUGIN_"
+        env_prefix = "DISABLED_"  # 禁用环境变量前缀
 
 
 class SecuritySettings(BaseConfigSettings):
@@ -246,7 +263,7 @@ class SecuritySettings(BaseConfigSettings):
     session_timeout: int = Field(default=3600, description="会话超时时间(秒)")
 
     class Config:
-        env_prefix = "SECURITY_"
+        env_prefix = "DISABLED_"  # 禁用环境变量前缀
 
 
 class Settings(BaseSettings):
@@ -259,7 +276,7 @@ class Settings(BaseSettings):
     实现方式：
     - 继承Pydantic BaseSettings提供强大的配置管理功能
     - 组合各个子配置类实现模块化配置管理
-    - 支持.env文件和环境变量配置
+    - 不依赖 .env 或环境变量加载（单一配置文件原则）
     - 自动创建必要的目录结构
     - 提供配置保存和加载功能
 
@@ -292,28 +309,30 @@ class Settings(BaseSettings):
     plugins: PluginSettings = Field(default_factory=PluginSettings)
     security: SecuritySettings = Field(default_factory=SecuritySettings)
 
-    # 路径配置
-    project_root: Path = Field(default_factory=lambda: Path(__file__).parent.parent.resolve())
+    # 路径配置（统一为全局目录）
+    project_root: Path = Field(default_factory=lambda: get_global_config_dir())
 
     @property
     def data_dir(self) -> Path:
-        """数据存储目录"""
-        return self.project_root / CONFIG_DIR_NAME
+        """数据存储目录（全局 .novel_editor）"""
+        return get_global_config_dir()
 
     @property
     def cache_dir(self) -> Path:
-        """缓存目录"""
+        """缓存目录（全局）"""
         return self.data_dir / "cache"
 
     @property
     def log_dir(self) -> Path:
-        """日志目录"""
+        """日志目录（全局）"""
         return self.data_dir / "logs"
 
     class Config:
-        env_file = ".env"
+        # 严格单一配置文件：不从 .env 或环境变量加载，所有配置只来自全局 config.json
+        env_file = None
         env_file_encoding = "utf-8"
-        env_nested_delimiter = "__"
+        # 使用不可能冲突的分隔符，避免环境变量匹配
+        env_nested_delimiter = "::"
         case_sensitive = False
         extra = "allow"
 
@@ -363,6 +382,33 @@ class Settings(BaseSettings):
             else:
                 config_dict = self.dict()
 
+            # 读取现有文件，保留未知键，进行深度合并
+            from src.shared.utils.file_operations import get_file_operations
+            import asyncio
+            ops = get_file_operations("settings")
+            existing: dict[str, Any] = {}
+            try:
+                if file_path.exists():
+                    loop = asyncio.get_event_loop()
+                    loaded = loop.run_until_complete(ops.load_json_cached(file_path))
+                    if isinstance(loaded, dict):
+                        existing = loaded
+            except Exception:
+                existing = {}
+
+            def overlay_preserve_unknowns(existing: dict, new: dict) -> dict:
+                """以 new 为主，保留 existing 中 new 不包含的键；对于字典，递归合并未知键。"""
+                out = dict(new)
+                for k, v in existing.items():
+                    if k not in out:
+                        out[k] = v
+                    else:
+                        if isinstance(out[k], dict) and isinstance(v, dict):
+                            out[k] = overlay_preserve_unknowns(v, out[k])
+                return out
+
+            merged = overlay_preserve_unknowns(existing, config_dict)
+
             # 简化的路径转换函数
             def convert_paths(obj):
                 if isinstance(obj, dict):
@@ -373,19 +419,18 @@ class Settings(BaseSettings):
                     return [convert_paths(item) for item in obj]
                 return obj
 
-            config_dict = convert_paths(config_dict)
+            merged = convert_paths(merged)
 
-            # 使用统一文件操作进行原子性写入
+            # 使用统一文件操作进行原子性写入（线程安全地调用异步保存）
             from src.shared.utils.file_operations import get_file_operations
             ops = get_file_operations("settings")
-            # 线程安全地调用异步保存
             try:
                 import asyncio, threading
                 asyncio.get_running_loop()
                 result_ref = {}
                 def runner():
                     try:
-                        result_ref['ok'] = asyncio.run(ops.save_json_atomic(file_path, config_dict, create_backup=True))
+                        result_ref['ok'] = asyncio.run(ops.save_json_atomic(file_path, merged, create_backup=True))
                     except Exception as e:
                         result_ref['error'] = e
                 t = threading.Thread(target=runner, daemon=True)
@@ -395,7 +440,7 @@ class Settings(BaseSettings):
             except RuntimeError:
                 # 无运行中事件循环
                 import asyncio
-                asyncio.run(ops.save_json_atomic(file_path, config_dict, create_backup=True))
+                asyncio.run(ops.save_json_atomic(file_path, merged, create_backup=True))
 
         except Exception as e:
             raise IOError(f"保存配置文件失败: {e}") from e
@@ -474,75 +519,65 @@ class Settings(BaseSettings):
 # 全局单例已移除，现在只支持项目作用域的设置
 
 
-# ——— 新增：项目作用域的设置/DB辅助函数 ———
-_project_settings_cache: dict[str, Settings] = {}
+# ——— 应用级全局设置（单一配置文件） ———
+_project_settings_cache: dict[str, "Settings"] = {}
 
 
-def get_settings_for_project(project_root: Path) -> Settings:
-    """按项目根路径加载/缓存配置，存放于项目内 .novel_editor/config.json。"""
-    from src.shared.project_context import ProjectPaths, ensure_project_dirs
-
-    root = Path(project_root).resolve()
-    key = str(root)
+def _get_global_settings_cached() -> "Settings":
+    key = "__GLOBAL__"
     cached = _project_settings_cache.get(key)
     if cached:
         return cached
-
-    paths = ProjectPaths(root)
-    ensure_project_dirs(paths)
-    config_file = paths.config_file
-
+    # 统一从全局配置文件加载/初始化
+    cfg_path = get_global_config_path()
     try:
-        if config_file.exists():
-            settings = Settings.load_from_file(config_file)
+        if cfg_path.exists():
+            settings = Settings.load_from_file(cfg_path)
         else:
             settings = Settings()
-        # 覆盖项目根路径，确保 Settings.data_dir 指向项目内
+        # 覆盖全局根目录为全局配置目录
         try:
-            settings.project_root = root
+            settings.project_root = get_global_config_dir()
         except Exception:
             pass
-        # 保存回项目配置
-        settings.save_to_file(config_file)
+        # 保存一次，确保文件存在
+        settings.save_to_file(cfg_path)
     except Exception as e:
-        print(f"项目设置加载失败，使用默认配置: {e}")
+        print(f"全局设置加载失败，使用默认配置: {e}")
         settings = Settings()
         try:
-            settings.project_root = root
+            settings.project_root = get_global_config_dir()
         except Exception:
             pass
-
     _project_settings_cache[key] = settings
     return settings
 
 
-def reload_settings_for_project(project_root: Path) -> Settings:
-    """强制从项目内配置文件重新加载 Settings（绕过缓存）。"""
+def get_settings_for_project(project_root: Path) -> "Settings":
+    """兼容接口：忽略 project_root，返回全局设置。"""
+    return _get_global_settings_cached()
+
+
+def reload_settings_for_project(project_root: Path) -> "Settings":
+    """兼容接口：强制从全局配置文件重新加载 Settings。"""
     global _project_settings_cache
     try:
-        root = Path(project_root).resolve()
-        key = str(root)
-        # 丢弃缓存
-        if key in _project_settings_cache:
-            try:
-                del _project_settings_cache[key]
-            except Exception:
-                _project_settings_cache.pop(key, None)
+        _project_settings_cache.pop("__GLOBAL__", None)
         # 重新加载
-        return get_settings_for_project(root)
+        return _get_global_settings_cached()
     except Exception as e:
-        print(f"⚠️ 重新加载项目配置失败，返回当前默认设置: {e}")
-        return get_settings_for_project(project_root)
+        print(f"⚠️ 重新加载全局配置失败，返回当前默认设置: {e}")
+        return _get_global_settings_cached()
 
 
 
 def db_url_for_project(project_root: Path) -> str:
-    """返回项目内 SQLite 数据库 URL（如需数据库）。"""
-    from src.shared.project_context import ProjectPaths, ensure_project_dirs
-
-    paths = ProjectPaths(Path(project_root))
-    ensure_project_dirs(paths)
-    return f"sqlite:///{paths.sqlite_db.as_posix()}"
+    """兼容接口：返回全局 SQLite 数据库 URL（如需数据库）。"""
+    # 放在全局 data/sqlite/ 下
+    root = get_global_config_dir()
+    sqlite_dir = (root / "data" / "sqlite")
+    sqlite_dir.mkdir(parents=True, exist_ok=True)
+    return f"sqlite:///{(sqlite_dir / 'novel.db').as_posix()}"
 
 
 # reset_settings 函数已移除，现在使用项目作用域的设置
@@ -553,10 +588,10 @@ def db_url_for_project(project_root: Path) -> str:
 
 def update_ai_provider_for_project(project_root: Path, provider: str) -> bool:
     """
-    动态更新项目的AI提供商
+    动态更新AI提供商（全局级别）
 
     Args:
-        project_root: 项目根目录
+        project_root: 兼容参数（忽略）
         provider: 新的提供商名称 ('openai', 'deepseek')
 
     Returns:
@@ -569,11 +604,9 @@ def update_ai_provider_for_project(project_root: Path, provider: str) -> bool:
         old_provider = settings.ai_service.default_provider
         settings.ai_service.default_provider = provider
 
-        # 保存到项目配置文件
-        from src.shared.project_context import ProjectPaths, ensure_project_dirs
-        paths = ProjectPaths(project_root)
-        ensure_project_dirs(paths)
-        settings.save_to_file(paths.config_file)
+        # 保存到全局配置文件
+        from config.settings import get_global_config_path
+        settings.save_to_file(get_global_config_path())
 
         print(f"🔄 项目AI提供商已从 {old_provider} 更新为 {provider}")
 

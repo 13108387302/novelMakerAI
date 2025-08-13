@@ -1,0 +1,9 @@
+{
+  "enabled_plugins": [
+    "markdown_export",
+    "pdf_export",
+    "text_processor"
+  ],
+  "disabled_plugins": [],
+  "plugin_settings": {}
+}

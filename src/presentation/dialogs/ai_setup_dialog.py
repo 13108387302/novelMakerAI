@@ -331,19 +331,8 @@ class AISetupDialog(QDialog):
         env_group = QGroupBox("环境变量设置")
         env_layout = QVBoxLayout(env_group)
 
-        env_info = QLabel("你也可以通过环境变量配置AI服务：")
+        env_info = QLabel("当前版本仅支持在应用内设置界面配置AI服务，环境变量/.env 已停用。")
         env_layout.addWidget(env_info)
-
-        env_text = QTextEdit()
-        env_text.setMaximumHeight(150)
-        env_text.setPlainText("""
-# 在 .env 文件中设置：
-AI_OPENAI_API_KEY=your-openai-key
-AI_DEEPSEEK_API_KEY=your-deepseek-key
-AI_DEFAULT_PROVIDER=openai
-        """.strip())
-        env_text.setReadOnly(True)
-        env_layout.addWidget(env_text)
 
         layout.addWidget(env_group)
         layout.addStretch()

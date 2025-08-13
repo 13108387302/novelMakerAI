@@ -140,16 +140,28 @@ class StatusService(QObject):
         self.status_updated.emit(self.get_all_statistics())
     
     def update_project_statistics(self, documents: List[Document]):
-        """更新项目统计数据"""
+        """更新项目统计数据（优先使用实体统计，回退到内容统计）"""
         try:
             total_words = 0
             total_docs = len(documents)
 
             for doc in documents:
-                if hasattr(doc, 'content') and doc.content:
-                    # 简单的字数统计（去除空白字符）
-                    words = len(doc.content.replace(' ', '').replace('\n', '').replace('\t', ''))
-                    total_words += words
+                # 优先使用实体自带统计（更准确/更快）
+                try:
+                    stats = getattr(doc, 'statistics', None)
+                    if stats and getattr(stats, 'word_count', None) is not None:
+                        total_words += int(stats.word_count)
+                        continue
+                except Exception:
+                    pass
+                # 回退：基于内容粗略统计（去除空白）
+                try:
+                    content = getattr(doc, 'content', None) or ""
+                    if content:
+                        words = len(content.replace(' ', '').replace('\n', '').replace('\t', ''))
+                        total_words += words
+                except Exception:
+                    pass
 
             self.statistics["total_words"] = total_words
             self.statistics["total_documents"] = total_docs
@@ -161,7 +173,7 @@ class StatusService(QObject):
 
         except Exception as e:
             logger.error(f"更新项目统计失败: {e}")
-    
+
     def record_document_save(self, document: Document):
         """记录文档保存"""
         self.statistics["last_save_time"] = datetime.now()

@@ -20,6 +20,7 @@ from PyQt6.QtCore import Qt, pyqtSignal, QSize, QPoint
 from PyQt6.QtGui import QFont, QPixmap, QIcon, QPalette, QAction, QDesktopServices, QColor
 
 from src.shared.utils.logger import get_logger
+from src.presentation.styles.theme_manager import ThemeManager, ThemeType
 
 logger = get_logger(__name__)
 
@@ -53,7 +54,7 @@ class RecentProjectItem(QWidget):
         name_font.setBold(True)
         name_font.setFamily("Microsoft YaHei UI")
         name_label.setFont(name_font)
-        name_label.setStyleSheet("color: #1e293b;")
+        # 色彩交由全局主题
         layout.addWidget(name_label)
 
         # 项目路径
@@ -62,7 +63,7 @@ class RecentProjectItem(QWidget):
         path_font.setPointSize(10)
         path_font.setFamily("Microsoft YaHei UI")
         path_label.setFont(path_font)
-        path_label.setStyleSheet("color: #64748b;")
+        # 色彩交由全局主题
         layout.addWidget(path_label)
 
         # 最后打开时间
@@ -71,24 +72,19 @@ class RecentProjectItem(QWidget):
         time_font.setPointSize(9)
         time_font.setFamily("Microsoft YaHei UI")
         time_label.setFont(time_font)
-        time_label.setStyleSheet("color: #94a3b8;")
+        # 色彩交由全局主题
         layout.addWidget(time_label)
 
     def _setup_style(self):
         """设置样式"""
-        self.setStyleSheet("""
-            RecentProjectItem {
-                background-color: #ffffff;
-                border: 1px solid #f1f5f9;
-                border-radius: 12px;
-                margin: 4px 0px;
-            }
-            RecentProjectItem:hover {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #fef7ff, stop:1 #f0f9ff);
-                border-color: #a855f7;
-            }
-        """)
+        # 移除硬编码样式，使用全局主题 QSS；保留圆角通过属性标记由主题表接管
+        self.setProperty("card", True)
+        # 设置 objectName 便于主题表精准选择，并启用 hover 反馈
+        self.setObjectName("RecentProjectCard")
+        try:
+            self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        except Exception:
+            pass
 
         # 设置固定高度和阴影
         self.setFixedHeight(92)
@@ -148,8 +144,11 @@ class StartupWindow(QDialog):
     create_new_project = pyqtSignal(dict)  # 请求创建新项目，传递项目信息
     remove_requested = pyqtSignal(str)  # 请求移除项目
 
-    def __init__(self, recent_projects: List[Dict[str, Any]] = None, parent=None):
+    def __init__(self, recent_projects: List[Dict[str, Any]] = None, parent=None, theme_manager: Optional[ThemeManager] = None):
         super().__init__(parent)
+        # 复用主程序注入的 ThemeManager，避免不一致
+        if theme_manager is not None:
+            self.theme_manager = theme_manager
         self.recent_projects = recent_projects or []
         self.selected_project_path: Optional[str] = None
         self.created_project_path: Optional[str] = None
@@ -174,6 +173,27 @@ class StartupWindow(QDialog):
         self._setup_connections()
         self._load_recent_projects()
         self._apply_global_styles()
+        # 应用全局主题（与主程序一致）：仅复用主程序注入的 ThemeManager，不再自行解析
+        try:
+            tm = None
+            if hasattr(self, 'theme_manager') and getattr(self, 'theme_manager'):
+                tm = getattr(self, 'theme_manager')
+            elif parent is not None and hasattr(parent, 'theme_manager'):
+                tm = getattr(parent, 'theme_manager')
+            if tm is not None:
+                # 使用主应用的 ThemeManager，记录有效主题供调试
+                current = tm.get_current_theme()
+                effective = current
+                try:
+                    if hasattr(tm, 'get_effective_theme'):
+                        effective = tm.get_effective_theme()
+                except Exception:
+                    pass
+                logger.warning(f"[Theme][Startup] Using injected ThemeManager current -> {current}; effective -> {effective}; no reapply")
+            else:
+                logger.warning("[Theme][Startup] No injected ThemeManager; skip applying theme")
+        except Exception as e:
+            logger.warning(f"[Theme][Startup] Apply failed: {e}")
 
     def _setup_ui(self):
         """设置UI"""
@@ -198,13 +218,8 @@ class StartupWindow(QDialog):
     def _create_header_section(self, parent_layout):
         """创建标题区域"""
         header_frame = QFrame()
-        header_frame.setStyleSheet("""
-            QFrame {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 #667eea, stop:0.5 #764ba2, stop:1 #f093fb);
-                border: none;
-            }
-        """)
+        # 背景由主题 QSS 提供，标记为 hero 区域
+        header_frame.setProperty("hero", True)
         header_frame.setFixedHeight(140)
 
         header_layout = QVBoxLayout(header_frame)
@@ -221,7 +236,7 @@ class StartupWindow(QDialog):
         icon_font = QFont()
         icon_font.setPointSize(32)
         icon_label.setFont(icon_font)
-        icon_label.setStyleSheet("color: white;")
+        # 颜色跟随主题
         title_container.addWidget(icon_label)
 
         # 标题和版本的垂直布局
@@ -230,21 +245,24 @@ class StartupWindow(QDialog):
 
         # 应用程序标题
         title_label = QLabel("AI小说编辑器")
+        title_label.setProperty("title", True)
         title_font = QFont()
         title_font.setPointSize(28)
         title_font.setBold(True)
         title_font.setFamily("Microsoft YaHei UI")
         title_label.setFont(title_font)
-        title_label.setStyleSheet("color: white;")
+        # 颜色跟随主题
         text_layout.addWidget(title_label)
 
         # 版本信息
         version_label = QLabel("版本 2.0.0 · 现代化架构")
+        version_label.setProperty("version", True)
         version_font = QFont()
         version_font.setPointSize(12)
         version_font.setFamily("Microsoft YaHei UI")
         version_label.setFont(version_font)
-        version_label.setStyleSheet("color: rgba(255,255,255,0.9);")
+        # 次要说明文字，颜色由 [hero][secondary] 规则控制
+        version_label.setProperty("secondary", True)
         text_layout.addWidget(version_label)
 
         title_container.addLayout(text_layout)
@@ -271,13 +289,8 @@ class StartupWindow(QDialog):
         """创建最近项目区域"""
         recent_frame = QFrame()
         recent_frame.setFrameStyle(QFrame.Shape.StyledPanel)
-        recent_frame.setStyleSheet("""
-            QFrame {
-                background-color: #ffffff;
-                border: none;
-                border-radius: 16px;
-            }
-        """)
+        # 由主题提供卡片样式
+        recent_frame.setProperty("card", True)
         # 更深的卡片阴影
         shadow = QGraphicsDropShadowEffect(self)
         shadow.setColor(QColor(0, 0, 0, 60))
@@ -306,7 +319,7 @@ class StartupWindow(QDialog):
         recent_title_font.setBold(True)
         recent_title_font.setFamily("Microsoft YaHei UI")
         recent_title.setFont(recent_title_font)
-        recent_title.setStyleSheet("color: #1f2937;")
+        # 颜色跟随主题
         title_container.addWidget(recent_title)
 
         title_container.addItem(QSpacerItem(40, 20, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum))
@@ -316,31 +329,7 @@ class StartupWindow(QDialog):
         search_box = QLineEdit()
         search_box.setPlaceholderText("🔍 搜索项目名称或路径...")
         search_box.setClearButtonEnabled(True)
-        search_box.setStyleSheet("""
-            QLineEdit {
-                padding: 12px 16px;
-                border: 2px solid #e5e7eb;
-                border-radius: 12px;
-                background: #f9fafb;
-                color: #1f2937;
-                font-size: 11pt;
-                font-family: "Microsoft YaHei UI";
-                selection-background-color: #667eea;
-                selection-color: white;
-            }
-            QLineEdit:focus {
-                border-color: #667eea;
-                background: #ffffff;
-                color: #111827;
-                outline: none;
-            }
-            QLineEdit:hover {
-                border-color: #d1d5db;
-            }
-            QLineEdit::placeholder {
-                color: #9ca3af;
-            }
-        """)
+        # 输入框样式由主题统一控制
         search_box.textChanged.connect(self._on_search_changed)
         recent_layout.addWidget(search_box)
 
@@ -349,43 +338,11 @@ class StartupWindow(QDialog):
         scroll_area.setWidgetResizable(True)
         scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll_area.setStyleSheet("""
-            QScrollArea {
-                border: none;
-                background-color: transparent;
-            }
-            QScrollArea > QWidget > QWidget {
-                background-color: transparent;
-            }
-            QScrollBar:vertical {
-                background: transparent;
-                width: 8px;
-                margin: 0px;
-                border-radius: 4px;
-            }
-            QScrollBar::handle:vertical {
-                background: #cbd5e1;
-                min-height: 20px;
-                border-radius: 4px;
-                margin: 2px;
-            }
-            QScrollBar::handle:vertical:hover {
-                background: #94a3b8;
-            }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-                height: 0;
-                background: none;
-                border: none;
-            }
-        """)
+        # 滚动区域样式由主题统一控制
 
         # 项目列表容器
         self.projects_container = QWidget()
-        self.projects_container.setStyleSheet("""
-            QWidget {
-                background-color: transparent;
-            }
-        """)
+        # 背景由主题控制
         self.projects_layout = QVBoxLayout(self.projects_container)
         self.projects_layout.setContentsMargins(0, 12, 0, 12)
         self.projects_layout.setSpacing(8)
@@ -401,13 +358,8 @@ class StartupWindow(QDialog):
         """创建操作区域"""
         actions_frame = QFrame()
         actions_frame.setFrameStyle(QFrame.Shape.StyledPanel)
-        actions_frame.setStyleSheet("""
-            QFrame {
-                background-color: #ffffff;
-                border: none;
-                border-radius: 16px;
-            }
-        """)
+        # 由主题提供卡片样式
+        actions_frame.setProperty("card", True)
         shadow2 = QGraphicsDropShadowEffect(self)
         shadow2.setColor(QColor(0, 0, 0, 60))
         shadow2.setBlurRadius(32)
@@ -436,7 +388,7 @@ class StartupWindow(QDialog):
         actions_title_font.setBold(True)
         actions_title_font.setFamily("Microsoft YaHei UI")
         actions_title.setFont(actions_title_font)
-        actions_title.setStyleSheet("color: #1f2937;")
+        # 颜色跟随主题
         title_container.addWidget(actions_title)
 
         title_container.addItem(QSpacerItem(40, 20, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum))
@@ -445,55 +397,18 @@ class StartupWindow(QDialog):
         # 打开项目文件夹按钮
         self.open_folder_btn = QPushButton("📁  打开项目文件夹")
         self.open_folder_btn.setMinimumHeight(56)
-        self.open_folder_btn.setStyleSheet("""
-            QPushButton {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #667eea, stop:1 #764ba2);
-                color: white;
-                border: none;
-                border-radius: 12px;
-                font-size: 12pt;
-                font-weight: 600;
-                font-family: "Microsoft YaHei UI";
-                padding: 14px 20px;
-                text-align: left;
-            }
-            QPushButton:hover {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #5a67d8, stop:1 #6b46c1);
-            }
-            QPushButton:pressed {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #4c51bf, stop:1 #553c9a);
-            }
-        """)
+        # 使用强调按钮样式+炫酷胶囊+fancy
+        self.open_folder_btn.setProperty("accent", True)
+        self.open_folder_btn.setProperty("fancy", True)
+        self.open_folder_btn.setStyleSheet("")
         actions_layout.addWidget(self.open_folder_btn)
 
         # 创建新项目按钮
         self.create_project_btn = QPushButton("✨  创建新项目")
         self.create_project_btn.setMinimumHeight(56)
-        self.create_project_btn.setStyleSheet("""
-            QPushButton {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #f093fb, stop:1 #f5576c);
-                color: white;
-                border: none;
-                border-radius: 12px;
-                font-size: 12pt;
-                font-weight: 600;
-                font-family: "Microsoft YaHei UI";
-                padding: 14px 20px;
-                text-align: left;
-            }
-            QPushButton:hover {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #e879f9, stop:1 #f43f5e);
-            }
-            QPushButton:pressed {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #d946ef, stop:1 #e11d48);
-            }
-        """)
+        self.create_project_btn.setProperty("accent", True)
+        self.create_project_btn.setProperty("fancy", True)
+        self.create_project_btn.setStyleSheet("")
         actions_layout.addWidget(self.create_project_btn)
 
         # 添加弹性空间
@@ -507,13 +422,7 @@ class StartupWindow(QDialog):
     def _create_footer_section(self, parent_layout):
         """创建底部区域"""
         footer_frame = QFrame()
-        footer_frame.setStyleSheet("""
-            QFrame {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #ffffff, stop:1 #f8fafc);
-                border-top: 1px solid #e2e8f0;
-            }
-        """)
+        # 由主题提供页脚背景
         footer_frame.setFixedHeight(72)
 
         footer_layout = QHBoxLayout(footer_frame)
@@ -521,11 +430,7 @@ class StartupWindow(QDialog):
 
         # 左侧信息
         info_label = QLabel("💡 选择一个项目文件夹开始创作，或创建全新的小说项目")
-        info_label.setStyleSheet("""
-            color: #64748b;
-            font-size: 11pt;
-            font-family: "Microsoft YaHei UI";
-        """)
+        # 文本颜色交给主题
         footer_layout.addWidget(info_label)
 
         # 右侧退出按钮
@@ -534,40 +439,17 @@ class StartupWindow(QDialog):
         exit_btn = QPushButton("退出")
         exit_btn.setMinimumHeight(32)
         exit_btn.setMinimumWidth(80)
-        exit_btn.setStyleSheet("""
-            QPushButton {
-                background-color: transparent;
-                color: #64748b;
-                border: 1px solid #cbd5e1;
-                border-radius: 8px;
-                padding: 10px 24px;
-                font-size: 11pt;
-                font-family: "Microsoft YaHei UI";
-                min-height: 16px;
-            }
-            QPushButton:hover {
-                background-color: #f1f5f9;
-                border-color: #94a3b8;
-                color: #475569;
-            }
-        """)
+        # 按钮样式交给主题
         exit_btn.clicked.connect(self.reject)
         footer_layout.addWidget(exit_btn)
 
         parent_layout.addWidget(footer_frame)
 
     def _apply_global_styles(self):
-        """应用全局样式，优化窗口背景与字体"""
-        self.setStyleSheet(self.styleSheet() + """
-            QDialog {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #f8fafc, stop:1 #e2e8f0);
-            }
-            QLabel {
-                color: #1e293b;
-                font-family: "Microsoft YaHei UI";
-            }
-        """)
+        """交由 ThemeManager 统一样式，移除本地硬编码样式"""
+        # 旧版在此叠加浅色渐变背景，导致深色/自动主题不一致
+        # 这里改为不做任何操作，具体样式由 ThemeManager 的全局 QSS 控制
+        return
 
     def _on_search_changed(self, text: str):
         """根据搜索关键字过滤最近项目"""
@@ -584,12 +466,7 @@ class StartupWindow(QDialog):
         if not matched:
             # 搜索无结果的空状态
             empty_container = QWidget()
-            empty_container.setStyleSheet("""
-                QWidget {
-                    background-color: transparent;
-                    border-radius: 12px;
-                }
-            """)
+            # 外观由主题控制
             empty_layout = QVBoxLayout(empty_container)
             empty_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
             empty_layout.setSpacing(16)
@@ -601,28 +478,19 @@ class StartupWindow(QDialog):
             empty_icon_font = QFont()
             empty_icon_font.setPointSize(48)
             empty_icon.setFont(empty_icon_font)
-            empty_icon.setStyleSheet("color: #e2e8f0; margin: 10px;")
+            # 颜色交由主题
             empty_layout.addWidget(empty_icon)
 
             # 无结果文字
             empty_label = QLabel("未找到匹配的项目")
             empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            empty_label.setStyleSheet("""
-                color: #64748b;
-                font-size: 14pt;
-                font-weight: 500;
-                font-family: "Microsoft YaHei UI";
-            """)
+            # 文本外观由主题控制
             empty_layout.addWidget(empty_label)
 
             # 搜索提示
             hint_label = QLabel("尝试使用不同的关键词搜索")
             hint_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            hint_label.setStyleSheet("""
-                color: #94a3b8;
-                font-size: 11pt;
-                font-family: "Microsoft YaHei UI";
-            """)
+            # 文本外观由主题控制
             empty_layout.addWidget(hint_label)
 
             self.projects_layout.addWidget(empty_container)
@@ -667,12 +535,7 @@ class StartupWindow(QDialog):
         if not self.recent_projects:
             # 显示空状态
             empty_container = QWidget()
-            empty_container.setStyleSheet("""
-                QWidget {
-                    background-color: transparent;
-                    border-radius: 12px;
-                }
-            """)
+            # 外观由主题控制
             empty_layout = QVBoxLayout(empty_container)
             empty_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
             empty_layout.setSpacing(20)
@@ -684,30 +547,19 @@ class StartupWindow(QDialog):
             empty_icon_font = QFont()
             empty_icon_font.setPointSize(64)
             empty_icon.setFont(empty_icon_font)
-            empty_icon.setStyleSheet("color: #e2e8f0; margin: 20px;")
+            # 颜色交由主题
             empty_layout.addWidget(empty_icon)
 
             # 空状态文字
             empty_label = QLabel("暂无最近项目")
             empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            empty_label.setStyleSheet("""
-                color: #64748b;
-                font-size: 16pt;
-                font-weight: 600;
-                font-family: "Microsoft YaHei UI";
-                margin: 10px 0px;
-            """)
+            # 文本外观由主题控制
             empty_layout.addWidget(empty_label)
 
             # 提示文字
             hint_label = QLabel("创建新项目或打开现有项目文件夹开始使用")
             hint_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            hint_label.setStyleSheet("""
-                color: #94a3b8;
-                font-size: 12pt;
-                font-family: "Microsoft YaHei UI";
-                line-height: 1.5;
-            """)
+            # 文本外观由主题控制
             empty_layout.addWidget(hint_label)
 
             self.projects_layout.addWidget(empty_container)

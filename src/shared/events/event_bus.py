@@ -92,11 +92,12 @@ class EventSubscription:
     filter_func: Optional[Callable[[Event], bool]]
     max_retries: int
     subscriber_ref: Optional[weakref.ref]
+    subscription_id: str
 
 
 class EventHandler(ABC):
     """事件处理器接口"""
-    
+
     @abstractmethod
     async def handle(self, event: Event) -> None:
         """处理事件"""
@@ -135,10 +136,10 @@ class EventBus:
         self._is_running = True
         self._event_queue = asyncio.Queue()
         self._processing_task: Optional[asyncio.Task] = None
-        
+
         # 启动事件处理任务
         self._start_processing()
-    
+
     def subscribe(
         self,
         event_type: Type[T],
@@ -152,13 +153,14 @@ class EventBus:
         with self._lock:
             # 检查处理器是否为异步
             is_async = asyncio.iscoroutinefunction(handler)
-            
+
             # 创建弱引用（如果提供了订阅者）
             subscriber_ref = None
             if subscriber is not None:
                 subscriber_ref = weakref.ref(subscriber, self._cleanup_subscription)
-            
+
             # 创建订阅信息
+            from uuid import uuid4
             subscription = EventSubscription(
                 handler=handler,
                 event_type=event_type,
@@ -166,9 +168,10 @@ class EventBus:
                 is_async=is_async,
                 filter_func=filter_func,
                 max_retries=max_retries,
-                subscriber_ref=subscriber_ref
+                subscriber_ref=subscriber_ref,
+                subscription_id=str(uuid4())
             )
-            
+
             # 添加到订阅列表
             if event_type not in self._subscriptions:
                 self._subscriptions[event_type] = []
@@ -182,16 +185,16 @@ class EventBus:
                     return existing.subscription_id
 
             self._subscriptions[event_type].append(subscription)
-            
+
             # 按优先级排序
             self._subscriptions[event_type].sort(
                 key=lambda s: s.priority.value,
                 reverse=True
             )
-            
+
             logger.debug(f"订阅事件 {event_type.__name__}，处理器: {handler}")
-            return subscription.handler.__name__
-    
+            return subscription.subscription_id
+
     def unsubscribe(
         self,
         event_type: Type[Event],
@@ -202,37 +205,44 @@ class EventBus:
         with self._lock:
             if event_type not in self._subscriptions:
                 return
-            
+
             subscriptions = self._subscriptions[event_type]
-            
+
             # 过滤要移除的订阅
             to_remove = []
             for subscription in subscriptions:
                 should_remove = False
-                
+
                 if handler is not None and subscription.handler == handler:
                     should_remove = True
                 elif subscriber is not None and subscription.subscriber_ref is not None:
                     if subscription.subscriber_ref() == subscriber:
                         should_remove = True
-                
+
                 if should_remove:
                     to_remove.append(subscription)
-            
+
             # 移除订阅
             for subscription in to_remove:
                 subscriptions.remove(subscription)
                 logger.debug(f"取消订阅事件 {event_type.__name__}")
-            
+
             # 如果没有订阅者了，移除事件类型
             if not subscriptions:
                 del self._subscriptions[event_type]
-    
+
     def publish(self, event: Event) -> None:
         """发布事件（同步）"""
         if not self._is_running:
             return
 
+        # 若未启动后台处理任务，直接处理事件作为兜底
+        if self._processing_task is None or self._processing_task.done():
+            try:
+                asyncio.run(self._process_event(event))
+                return
+            except Exception:
+                pass
         # 添加到事件队列
         try:
             asyncio.create_task(self._event_queue.put(event))
@@ -245,8 +255,28 @@ class EventBus:
         if not self._is_running:
             return
 
+        # 确保处理任务已启动；若未启动则直接处理，避免无人消费
+        if self._processing_task is None or self._processing_task.done():
+            try:
+                await self._process_event(event)
+                return
+            except Exception:
+                # 兜底：仍尝试放回队列
+                pass
+
         await self._event_queue.put(event)
-    
+
+    def start_in_background(self) -> None:
+        """在后台事件循环中启动事件处理任务（可多次安全调用）。"""
+        if self._processing_task is not None and not self._processing_task.done():
+            return
+        try:
+            loop = asyncio.get_event_loop()
+            self._processing_task = loop.create_task(self._process_events())
+        except RuntimeError:
+            # 没有运行中的事件循环则跳过，保留 publish/publish_async 的兜底逻辑
+            pass
+
     def _start_processing(self) -> None:
         """启动事件处理任务"""
         try:
@@ -255,7 +285,7 @@ class EventBus:
         except RuntimeError:
             # 没有事件循环，稍后启动
             pass
-    
+
     async def _process_events(self) -> None:
         """处理事件队列"""
         while self._is_running:
@@ -267,21 +297,21 @@ class EventBus:
                 continue
             except Exception as e:
                 logger.error(f"事件处理错误: {e}")
-    
+
     async def _process_event(self, event: Event) -> None:
         """处理单个事件"""
         event_type = type(event)
-        
+
         with self._lock:
             subscriptions = self._subscriptions.get(event_type, []).copy()
-        
+
         if not subscriptions:
             return
-        
+
         # 处理所有订阅
         for subscription in subscriptions:
             await self._handle_subscription(event, subscription)
-    
+
     async def _handle_subscription(self, event: Event, subscription: EventSubscription) -> None:
         """处理单个订阅"""
         try:
@@ -291,12 +321,12 @@ class EventBus:
                     # 订阅者已被垃圾回收，移除订阅
                     self._cleanup_subscription(subscription.subscriber_ref)
                     return
-            
+
             # 应用过滤器
             if subscription.filter_func is not None:
                 if not subscription.filter_func(event):
                     return
-            
+
             # 执行处理器
             retry_count = 0
             while retry_count <= subscription.max_retries:
@@ -319,10 +349,10 @@ class EventBus:
                             f"事件处理失败，重试 {retry_count}/{subscription.max_retries}: {e}"
                         )
                         await asyncio.sleep(0.1 * retry_count)  # 指数退避
-        
+
         except Exception as e:
             logger.error(f"订阅处理错误: {e}")
-    
+
     def _cleanup_subscription(self, weak_ref: weakref.ref) -> None:
         """清理已失效的订阅"""
         with self._lock:
@@ -331,10 +361,10 @@ class EventBus:
                     s for s in subscriptions
                     if s.subscriber_ref != weak_ref
                 ]
-                
+
                 if not subscriptions:
                     del self._subscriptions[event_type]
-    
+
     def get_subscription_count(self, event_type: Optional[Type[Event]] = None) -> int:
         """获取订阅数量"""
         with self._lock:
@@ -342,7 +372,7 @@ class EventBus:
                 return sum(len(subs) for subs in self._subscriptions.values())
             else:
                 return len(self._subscriptions.get(event_type, []))
-    
+
     def clear_subscriptions(self, event_type: Optional[Type[Event]] = None) -> None:
         """清空订阅"""
         with self._lock:
@@ -350,7 +380,7 @@ class EventBus:
                 self._subscriptions.clear()
             else:
                 self._subscriptions.pop(event_type, None)
-    
+
     def shutdown(self) -> None:
         """关闭事件总线（同步版本）"""
         self._is_running = False

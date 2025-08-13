@@ -197,11 +197,9 @@ class TextProcessorPlugin(EditorPlugin):
                 if self.get_selected_text():
                     self.replace_selected_text(processed_text)
                 else:
-                    # 替换整个文档内容
-                    current_doc = self.get_current_document()
-                    if current_doc:
-                        current_doc.content = processed_text
-                
+                    # 替换整个文档内容（通过编辑器服务，保证UI同步）
+                    self.set_content(processed_text)
+
                 QMessageBox.information(None, "完成", "已移除多余空行")
             else:
                 QMessageBox.information(None, "提示", "文本中没有多余的空行")
@@ -240,10 +238,9 @@ class TextProcessorPlugin(EditorPlugin):
                 if self.get_selected_text():
                     self.replace_selected_text(processed_text)
                 else:
-                    current_doc = self.get_current_document()
-                    if current_doc:
-                        current_doc.content = processed_text
-                
+                    # 替换整个文档内容（通过编辑器服务，保证UI同步）
+                    self.set_content(processed_text)
+
                 QMessageBox.information(None, "完成", "已统一段落格式")
             else:
                 QMessageBox.information(None, "提示", "段落格式已经统一")

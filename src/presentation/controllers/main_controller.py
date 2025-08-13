@@ -251,6 +251,14 @@ class MainController(QObject):
         # 设置事件监听
         self._setup_event_listeners()
 
+        # EditorBridge：集中与编辑器交互
+        try:
+            # 使用扩展版 EditorBridge，覆盖更多常见交互
+            from src.presentation.controllers.editor_bridge_expanded import EditorBridge
+            self._editor_bridge = EditorBridge(lambda: self._main_window)
+        except Exception:
+            self._editor_bridge = None
+
         logger.info("主控制器初始化完成")
 
     def _setup_event_listeners(self) -> None:
@@ -593,59 +601,19 @@ class MainController(QObject):
         except Exception as e:
             logger.error(f"安全打开文档失败: {e}")
 
-    def _simple_refresh_project_tree(self):
-        """简化的项目树刷新"""
-        try:
-            if hasattr(self, 'project_service') and self.project_service.has_current_project:
-                current_project = self.project_service.current_project
-                if current_project:
-                    # 使用非阻塞方式获取文档并刷新
-                    self._run_async_task(
-                        self.document_service.list_documents_by_project(current_project.id),
-                        success_callback=lambda docs: self._update_project_tree_with_documents(current_project, docs),
-                        error_callback=lambda e: self._update_project_tree_with_documents(current_project, [])
-                    )
-        except Exception as e:
-            logger.error(f"简化项目树刷新失败: {e}")
+    # 统一入口后，移除简化刷新方法，避免重复路径
 
-    def _force_refresh_project_tree(self):
-        """强制刷新项目树（确保新文档显示）"""
-        try:
-            if hasattr(self, 'project_service') and self.project_service.has_current_project:
-                current_project = self.project_service.current_project
-                if current_project:
-                    logger.info(f"强制刷新项目树: {current_project.title}")
-                    # 使用非阻塞方式获取文档并刷新
-                    self._run_async_task(
-                        self.document_service.list_documents_by_project(current_project.id),
-                        success_callback=lambda docs: self._force_update_project_tree(current_project, docs),
-                        error_callback=lambda e: logger.error(f"强制刷新项目树失败: {e}")
-                    )
-        except Exception as e:
-            logger.error(f"强制刷新项目树失败: {e}")
 
     def _force_update_project_tree(self, project, documents):
-        """强制更新项目树"""
+        """强制更新项目树 -> 统一委托到 _update_project_tree_with_new_documents，并展开树"""
         try:
+            self._update_project_tree_with_new_documents(project, documents)
             if hasattr(self, '_main_window') and self._main_window:
-                # 强制重新加载项目树
-                self._main_window.project_tree.load_project(project, documents)
-                logger.info(f"项目树强制更新完成: {project.title}, {len(documents)} 个文档")
-
                 # 展开项目节点，确保新文档可见
                 self._main_window.project_tree.expandAll()
-
         except Exception as e:
             logger.error(f"强制更新项目树失败: {e}")
 
-    def _update_project_tree_with_documents(self, project, documents):
-        """使用文档更新项目树"""
-        try:
-            if hasattr(self, '_main_window') and self._main_window:
-                self._main_window.project_tree.load_project(project, documents)
-                logger.debug(f"项目树更新完成: {project.title}, {len(documents)} 个文档")
-        except Exception as e:
-            logger.error(f"更新项目树失败: {e}")
 
     async def _create_document_from_tree_async(self, title: str, document_type: str, project_id: str) -> str:
         """异步从项目树创建文档"""
@@ -846,18 +814,20 @@ class MainController(QObject):
 
         logger.debug("✅ 编辑器组件存在")
 
-        # 获取当前文档
-        current_document = self.main_window.editor_widget.get_current_document()
+        # 获取当前文档（通过 EditorBridge）
+        current_document = (self._editor_bridge.get_current_document()
+                            if hasattr(self, '_editor_bridge') and self._editor_bridge else None)
         if not current_document:
             self._show_warning("提示", "没有打开的文档")
             logger.warning("❌ 尝试保存文档，但没有打开的文档")
             return
 
-        logger.info(f"✅ 找到当前文档: {current_document.title} (ID: {current_document.id})")
+        logger.info(f"✅ 找到当前文档: {getattr(current_document, 'title', '')} (ID: {getattr(current_document, 'id', '')})")
 
         # 准备文档数据
-        content = self.main_window.editor_widget.get_content()
-        old_content = current_document.content
+        content = (self._editor_bridge.get_content()
+                   if hasattr(self, '_editor_bridge') and self._editor_bridge else "")
+        old_content = getattr(current_document, 'content', '')
 
         # 更新文档
         self._update_document_for_save(current_document, content)
@@ -1085,6 +1055,14 @@ class MainController(QObject):
                 self.project_closed.emit()
                 self.status_message.emit("项目已关闭")
 
+                # 插件钩子：项目关闭
+                try:
+                    if hasattr(self, 'plugin_manager') and self.plugin_manager:
+                        from src.shared.plugins.plugin_interface import PluginHooks
+                        self.plugin_manager.execute_hook(PluginHooks.PROJECT_CLOSED, current_project)
+                except Exception:
+                    pass
+
                 logger.info("项目关闭完成")
             else:
                 logger.info("没有打开的项目需要关闭")
@@ -1250,11 +1228,11 @@ class MainController(QObject):
     async def _update_current_document_content(self) -> None:
         """更新当前文档内容"""
         try:
-            if hasattr(self.main_window, 'editor_widget') and self.main_window.editor_widget:
-                current_document = self.main_window.editor_widget.get_current_document()
+            if hasattr(self, '_editor_bridge') and self._editor_bridge:
+                current_document = self._editor_bridge.get_current_document()
                 if current_document:
                     # 获取编辑器中的最新内容
-                    content = self.main_window.editor_widget.get_content()
+                    content = self._editor_bridge.get_content()
 
                     # 更新文档内容
                     current_document.content = content
@@ -1315,6 +1293,13 @@ class MainController(QObject):
                 if success:
                     # 状态消息由 ProjectController 发送，避免重复
                     logger.info("项目保存成功")
+                    # 插件钩子：项目保存
+                    try:
+                        if hasattr(self, 'plugin_manager') and self.plugin_manager:
+                            from src.shared.plugins.plugin_interface import PluginHooks
+                            self.plugin_manager.execute_hook(PluginHooks.PROJECT_SAVED, self.project_service.current_project)
+                    except Exception:
+                        pass
                 else:
                     self._show_error("保存失败", "无法保存项目")
                     logger.error("项目保存失败")
@@ -1397,11 +1382,24 @@ class MainController(QObject):
                         project = self.project_service.current_project
                         if project:
                             self.project_opened.emit(project)
+                            # 插件钩子：项目打开（另存为并打开）
+                            try:
+                                if hasattr(self, 'plugin_manager') and self.plugin_manager:
+                                    from src.shared.plugins.plugin_interface import PluginHooks
+                                    self.plugin_manager.execute_hook(PluginHooks.PROJECT_OPENED, project)
+                            except Exception:
+                                pass
                         else:
                             # 兜底：尝试按路径加载再发送
                             project = await self.project_service.load_project(str(file_path))
                             if project:
                                 self.project_opened.emit(project)
+                                try:
+                                    if hasattr(self, 'plugin_manager') and self.plugin_manager:
+                                        from src.shared.plugins.plugin_interface import PluginHooks
+                                        self.plugin_manager.execute_hook(PluginHooks.PROJECT_OPENED, project)
+                                except Exception:
+                                    pass
                     except Exception as e:
                         logger.warning(f"切换到新项目后发送打开信号失败: {e}")
             else:
@@ -1603,6 +1601,79 @@ class MainController(QObject):
             logger.warning(f"导出完成回调检查文件失败: {e}")
 
     # ========================================================================
+
+    def export_current_document(self) -> None:
+        """导出当前文档（由文件菜单触发）"""
+        try:
+            # 获取当前文档
+            if not hasattr(self._main_window, 'editor_widget'):
+                self._show_warning("导出失败", "未找到编辑器")
+                return
+            editor = self._main_window.editor_widget
+            doc = editor.get_current_document() if hasattr(editor, 'get_current_document') else None
+            if not doc:
+                self._show_warning("导出失败", "没有打开的文档")
+                return
+
+            # 保存对话框，动态组合插件注册的扩展
+            from PyQt6.QtWidgets import QFileDialog
+            default_path = Path.cwd()
+            default_name = f"{doc.title or 'document'}.txt"
+
+            # 从导出服务列出所有格式（包含内置与插件）
+            try:
+                supported = self.import_export_service.get_supported_formats()
+            except Exception:
+                supported = {}
+
+            # 构建过滤器字符串
+            filters = []
+            for name, exts in supported.items():
+                patt = " ".join([f"*{e}" for e in exts])
+                if patt:
+                    filters.append(f"{name} ({patt})")
+            if not filters:
+                filters = ["文本文件 (*.txt)"]
+
+            file_path, selected_filter = QFileDialog.getSaveFileName(
+                self._main_window,
+                "导出当前文档",
+                str(default_path / default_name),
+                ";;".join(filters)
+            )
+
+            if file_path:
+                p = Path(file_path)
+                suffix = p.suffix.lower()
+                # 若未选择扩展，依据过滤器补全
+                if not suffix and selected_filter:
+                    try:
+                        # 从过滤器中取第一个扩展
+                        exts_in_filter = [part for part in selected_filter.split(' ') if part.startswith('*.')]
+                        if exts_in_filter:
+                            first_ext = exts_in_filter[0].replace('*', '')
+                            p = p.with_suffix(first_ext)
+                    except Exception:
+                        pass
+
+                fixed_path = p
+                export_format = fixed_path.suffix.lower().lstrip('.')
+                from src.application.services.import_export.base import ExportOptions
+                QTimer.singleShot(0, lambda: self._run_async_task(
+                    self.import_export_service.export_document(
+                        doc.id,
+                        fixed_path,
+                        export_format,
+                        ExportOptions()
+                    ),
+                    success_callback=lambda _: self._on_export_task_done(fixed_path),
+                    error_callback=lambda e: self._show_error("导出文档失败", str(e))
+                ))
+
+        except Exception as e:
+            logger.error(f"导出当前文档失败: {e}")
+            self._show_error("导出失败", str(e))
+
     # 文档管理
     # ========================================================================
 
@@ -1782,6 +1853,17 @@ class MainController(QObject):
                     completion_callback(path)
                 else:
                     logger.warning("没有设置项目创建完成回调")
+                # 插件钩子：项目创建
+                try:
+                    if hasattr(self, 'plugin_manager') and self.plugin_manager:
+                        from src.shared.plugins.plugin_interface import PluginHooks
+                        self.plugin_manager.execute_hook(PluginHooks.PROJECT_CREATED, {
+                            "name": name, "description": description, "author": author,
+                            "target_word_count": target_word_count, "type": str(type_enum),
+                            "path": str(project_dir)
+                        })
+                except Exception:
+                    pass
 
             def on_error(e):
                 logger.error(f"项目创建异步任务失败: {e}")
@@ -1825,8 +1907,8 @@ class MainController(QObject):
                 self._find_replace_dialog.tab_widget.setCurrentIndex(tab_index)
 
             # 设置当前选中的文本
-            if self._main_window and self._main_window.editor_widget:
-                selected_text = self._main_window.editor_widget.get_selected_text()
+            if hasattr(self, '_editor_bridge') and self._editor_bridge:
+                selected_text = self._editor_bridge.get_selected_text()
                 if selected_text:
                     self._find_replace_dialog.set_search_text(selected_text)
 
@@ -1876,20 +1958,21 @@ class MainController(QObject):
     def show_settings(self) -> None:
         """显示设置对话框"""
         try:
-            if not self._settings_dialog:
-                from src.presentation.styles.theme_manager import ThemeManager
-                theme_manager = self._main_window.theme_manager if hasattr(self._main_window, 'theme_manager') else None
+            # 始终使用主窗口注入的 ThemeManager
+            theme_manager = self._main_window.theme_manager if hasattr(self._main_window, 'theme_manager') else None
 
-                self._settings_dialog = SettingsDialog(
-                    self.settings_service,
-                    theme_manager,
-                    self._main_window
-                )
-                self._settings_dialog.settings_changed.connect(self._on_settings_changed)
-                self._settings_dialog.theme_changed.connect(self._on_theme_changed)
+            # 每次打开都创建新对话框，避免持有旧引用导致 ThemeManager/Settings 状态不同步
+            dialog = SettingsDialog(
+                self.settings_service,
+                theme_manager,
+                self._main_window
+            )
+            dialog.settings_changed.connect(self._on_settings_changed)
+            dialog.theme_changed.connect(self._on_theme_changed)
 
-            result = self._settings_dialog.exec()
-            if result == QMessageBox.StandardButton.Accepted:
+            from PyQt6.QtWidgets import QDialog
+            result = dialog.exec()
+            if result == QDialog.DialogCode.Accepted:
                 self.status_message.emit("设置已保存")
 
         except Exception as e:
@@ -1957,14 +2040,30 @@ class MainController(QObject):
     # 移除重复的_show_error方法定义，使用后面的线程安全版本
 
     def _show_warning(self, title: str, message: str) -> None:
-        """显示警告消息"""
-        if self._main_window:
-            QMessageBox.warning(self._main_window, title, message)
+        """显示警告消息（线程安全）"""
+        try:
+            from src.shared.utils.thread_safety import is_main_thread
+            if not is_main_thread():
+                # 切换到主线程执行
+                self.async_manager.execute_delayed(self._show_warning, 0, title, message)
+                return
+            if self._main_window:
+                QMessageBox.warning(self._main_window, title, message)
+        except Exception as e:
+            logger.error(f"显示警告失败: {e}")
 
     def _show_info(self, title: str, message: str) -> None:
-        """显示信息消息"""
-        if self._main_window:
-            QMessageBox.information(self._main_window, title, message)
+        """显示信息消息（线程安全）"""
+        try:
+            from src.shared.utils.thread_safety import is_main_thread
+            if not is_main_thread():
+                # 切换到主线程执行
+                self.async_manager.execute_delayed(self._show_info, 0, title, message)
+                return
+            if self._main_window:
+                QMessageBox.information(self._main_window, title, message)
+        except Exception as e:
+            logger.error(f"显示信息失败: {e}")
 
     # ========================================================================
     # 查找替换处理
@@ -1973,8 +2072,8 @@ class MainController(QObject):
     def _on_find_requested(self, search_text: str, options: dict):
         """处理查找请求"""
         try:
-            if self._main_window and self._main_window.editor_widget:
-                current_tab = self._main_window.editor_widget.get_current_tab()
+            if hasattr(self, '_editor_bridge') and self._editor_bridge:
+                current_tab = self._editor_bridge.get_current_tab()
                 if current_tab:
                     found = current_tab.find_text(
                         search_text,
@@ -2000,8 +2099,8 @@ class MainController(QObject):
     def _on_replace_requested(self, find_text: str, replace_text: str, options: dict):
         """处理替换请求"""
         try:
-            if self._main_window and self._main_window.editor_widget:
-                current_tab = self._main_window.editor_widget.get_current_tab()
+            if hasattr(self, '_editor_bridge') and self._editor_bridge:
+                current_tab = self._editor_bridge.get_current_tab()
                 if current_tab:
                     selected_text = current_tab.get_selected_text()
 
@@ -2026,8 +2125,8 @@ class MainController(QObject):
     def _on_replace_all_requested(self, find_text: str, replace_text: str, options: dict):
         """处理全部替换请求"""
         try:
-            if self._main_window and self._main_window.editor_widget:
-                current_tab = self._main_window.editor_widget.get_current_tab()
+            if hasattr(self, '_editor_bridge') and self._editor_bridge:
+                current_tab = self._editor_bridge.get_current_tab()
                 if current_tab:
                     count = current_tab.replace_text(
                         find_text,
@@ -2054,16 +2153,29 @@ class MainController(QObject):
             logger.error(f"处理设置变更失败: {e}")
 
     def _on_theme_changed(self, theme_name: str):
-        """主题变更处理"""
+        """主题变更处理（兼容中文/英文/枚举）"""
         try:
             logger.info(f"主题已变更: {theme_name}")
-            # 应用主题变更
-            if hasattr(self._main_window, 'theme_manager'):
-                from src.presentation.styles.theme_manager import ThemeType
-                theme_map = {"浅色主题": ThemeType.LIGHT, "深色主题": ThemeType.DARK, "自动": ThemeType.AUTO}
-                theme_type = theme_map.get(theme_name, ThemeType.LIGHT)
-                self._main_window.theme_manager.set_theme(theme_type)
-
+            if not hasattr(self._main_window, 'theme_manager'):
+                return
+            from src.presentation.styles.theme_manager import ThemeType
+            theme_type = None
+            # 兼容不同来源的命名
+            if isinstance(theme_name, str):
+                s = theme_name.strip().lower()
+                zh_map = {"浅色主题": "light", "深色主题": "dark", "自动": "auto"}
+                s = zh_map.get(s, s)
+                try:
+                    theme_type = ThemeType(s)
+                except Exception:
+                    theme_type = ThemeType.LIGHT
+            else:
+                try:
+                    # 若直接传 ThemeType
+                    theme_type = theme_name if isinstance(theme_name, ThemeType) else ThemeType.LIGHT
+                except Exception:
+                    theme_type = ThemeType.LIGHT
+            self._main_window.theme_manager.set_theme(theme_type)
         except Exception as e:
             logger.error(f"处理主题变更失败: {e}")
 
@@ -2091,8 +2203,8 @@ class MainController(QObject):
     def _on_template_applied(self, content: str):
         """模板应用处理"""
         try:
-            if self._main_window and self._main_window.editor_widget:
-                current_tab = self._main_window.editor_widget.get_current_tab()
+            if hasattr(self, '_editor_bridge') and self._editor_bridge:
+                current_tab = self._editor_bridge.get_current_tab()
                 if current_tab:
                     # 在当前光标位置插入模板内容
                     cursor = current_tab.text_edit.textCursor()
@@ -2251,14 +2363,14 @@ class MainController(QObject):
             try:
                 current_project = self.project_service.current_project
                 if current_project and getattr(current_project, 'id', None) == project_id:
-                    self._force_refresh_project_tree()
+                    self.schedule_refresh_project_tree()
             except Exception as e:
                 logger.debug(f"刷新项目树失败: {e}")
 
             # 如果有当前打开文档，恢复后强制重载并刷新当前标签内容
             try:
-                if hasattr(self.main_window, 'editor_widget') and self.main_window.editor_widget:
-                    current_doc = self.main_window.editor_widget.get_current_document()
+                if hasattr(self, '_editor_bridge') and self._editor_bridge:
+                    current_doc = self._editor_bridge.get_current_document()
                     if current_doc and getattr(current_doc, 'id', None):
                         doc_id = current_doc.id
                         # 强制重载文档对象（覆盖打开缓存）
@@ -2620,10 +2732,22 @@ class MainController(QObject):
             if document and self._main_window:
                 logger.info(f"在主线程中加载文档到编辑器: {document.title}")
                 # 在主线程中安全地加载文档到编辑器
-                self._main_window.editor_widget.load_document(document)
+                if hasattr(self, '_editor_bridge') and self._editor_bridge:
+                    self._editor_bridge.load_document(document)
+                else:
+                    self._main_window.editor_widget.load_document(document)
+
+                # 同步状态面板当前文档
+                try:
+                    if hasattr(self._main_window, 'status_panel') and self._main_window.status_panel:
+                        self._main_window.status_panel.set_document(document)
+                except Exception as se:
+                    logger.debug(f"更新状态面板当前文档失败: {se}")
+
                 # 若当前标签就是该文档，则刷新内容（覆盖旧内容）
                 try:
-                    tab = self._main_window.editor_widget.get_current_tab()
+                    tab = (self._editor_bridge.get_current_tab() if hasattr(self, '_editor_bridge') and self._editor_bridge
+                           else self._main_window.editor_widget.get_current_tab())
                     if tab and getattr(tab, 'document', None) and getattr(tab.document, 'id', None) == document_id:
                         tab.document = document
                         if hasattr(tab, 'set_content'):
@@ -2631,6 +2755,13 @@ class MainController(QObject):
                 except Exception as e:
                     logger.debug(f"刷新当前标签内容失败: {e}")
                 logger.info(f"文档打开成功: {document_id}")
+                # 插件钩子：文档打开
+                try:
+                    if hasattr(self, 'plugin_manager') and self.plugin_manager:
+                        from src.shared.plugins.plugin_interface import PluginHooks
+                        self.plugin_manager.execute_hook(PluginHooks.DOCUMENT_OPENED, document)
+                except Exception:
+                    pass
             elif document:
                 logger.warning(f"文档打开成功但主窗口不可用: {document_id}")
             else:
@@ -2750,10 +2881,10 @@ class MainController(QObject):
     def toggle_syntax_highlighting(self) -> None:
         """切换语法高亮"""
         try:
-            if hasattr(self._main_window, 'editor_widget') and self._main_window.editor_widget:
-                if hasattr(self._main_window.editor_widget, 'toggle_syntax_highlighting'):
-                    self._main_window.editor_widget.toggle_syntax_highlighting()
-                else:
+            if hasattr(self, '_editor_bridge') and self._editor_bridge:
+                try:
+                    self._editor_bridge.toggle_syntax_highlighting()
+                except Exception:
                     logger.warning("编辑器不支持语法高亮切换")
         except Exception as e:
             logger.error(f"切换语法高亮失败: {e}")
@@ -2870,23 +3001,6 @@ class MainController(QObject):
         logger.info(f"主题已切换到: {theme_name}")
         self.status_message.emit(f"主题已切换: {theme_name}")
 
-    def settings(self) -> None:
-        """打开设置对话框"""
-        try:
-            from src.presentation.dialogs.settings_dialog import SettingsDialog
-
-            dialog = SettingsDialog(self.settings_service, self._main_window)
-            dialog.settings_changed.connect(self._on_settings_changed)
-
-            if dialog.exec() == QDialog.DialogCode.Accepted:
-                logger.info("设置对话框已确认")
-                self.status_message.emit("设置已保存")
-            else:
-                logger.info("设置对话框已取消")
-
-        except Exception as e:
-            logger.error(f"打开设置对话框失败: {e}")
-            self._show_error("设置错误", f"无法打开设置对话框: {e}")
 
     # ========================================================================
     # 事件处理方法
@@ -2949,6 +3063,14 @@ class MainController(QObject):
             # 立即刷新项目树以显示新文档
             self._refresh_project_tree_for_new_document(normalized)
 
+            # 插件钩子：文档创建
+            try:
+                if hasattr(self, 'plugin_manager') and self.plugin_manager:
+                    from src.shared.plugins.plugin_interface import PluginHooks
+                    self.plugin_manager.execute_hook(PluginHooks.DOCUMENT_CREATED, normalized)
+            except Exception:
+                pass
+
             # 清除文档列表缓存
             self._clear_document_cache()
 
@@ -2960,18 +3082,46 @@ class MainController(QObject):
             logger.error(traceback.format_exc())
 
     def _on_document_saved(self, event: DocumentSavedEvent | str) -> None:
-        """处理文档保存事件（兼容旧签名）"""
+        """处理文档保存事件：同步状态面板的最后保存时间"""
         try:
+            title = None
             if isinstance(event, str):
                 logger.debug(f"📝 收到文档保存事件: {event}")
+                title = event
             else:
                 logger.debug(f"📝 收到文档保存事件: {event.document_title}")
+                title = getattr(event, 'document_title', None)
+
+            # 更新状态服务的最后保存时间并广播
+            try:
+                if hasattr(self, '_status_service') and self._status_service:
+                    from datetime import datetime
+                    self._status_service.statistics["last_save_time"] = datetime.now()
+                    # 立即通知状态面板刷新
+                    self._status_service.status_updated.emit(self._status_service.get_all_statistics())
+            except Exception as se:
+                logger.debug(f"更新状态服务最后保存时间失败: {se}")
+
+            # 插件钩子：文档保存
+            try:
+                if hasattr(self, 'plugin_manager') and self.plugin_manager:
+                    from src.shared.plugins.plugin_interface import PluginHooks
+                    self.plugin_manager.execute_hook(PluginHooks.DOCUMENT_SAVED, event)
+            except Exception:
+                pass
         except Exception as e:
             logger.error(f"❌ 处理文档保存事件失败: {e}")
 
     def _on_document_closed(self, document_id: str) -> None:
         try:
             logger.info(f"📕 文档已关闭: {document_id}")
+            # 插件钩子：文档关闭
+            try:
+                if hasattr(self, 'plugin_manager') and self.plugin_manager:
+                    from src.shared.plugins.plugin_interface import PluginHooks
+                    self.plugin_manager.execute_hook(PluginHooks.DOCUMENT_CLOSED, document_id)
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -2980,6 +3130,13 @@ class MainController(QObject):
             logger.info(f"🗑️ 文档已删除: {document_id}")
             # 刷新项目树
             self.schedule_refresh_project_tree()
+            # 插件钩子：文档删除（按照插件约定使用 DOCUMENT_CLOSED 或 DOCUMENT_MODIFIED）
+            try:
+                if hasattr(self, 'plugin_manager') and self.plugin_manager:
+                    from src.shared.plugins.plugin_interface import PluginHooks
+                    self.plugin_manager.execute_hook(PluginHooks.DOCUMENT_CLOSED, document_id)
+            except Exception:
+                pass
             # 若编辑器可用，关闭对应标签
             if hasattr(self, '_main_window') and self._main_window and hasattr(self._main_window, 'editor_widget'):
                 editor = self._main_window.editor_widget
@@ -3058,6 +3215,21 @@ class MainController(QObject):
 
                 # 使用延迟刷新，确保文档已完全保存
                 self.schedule_refresh_project_tree(100)
+                # 同步状态面板：更新项目和统计
+                try:
+                    if hasattr(self, '_main_window') and self._main_window and hasattr(self._main_window, 'status_panel'):
+                        self._main_window.status_panel.set_project(self.project_service.current_project)
+                        # 异步拉取文档后由 _immediate_refresh_project_tree 负责刷新；这里先尝试快速刷新一次
+                        if hasattr(self, 'document_service'):
+                            async def _quick_update():
+                                try:
+                                    docs = await self.document_service.list_documents_by_project(self.project_service.current_project.id)
+                                    self._main_window.status_panel.update_project_statistics(docs)
+                                except Exception:
+                                    pass
+                            self._run_async_task(_quick_update())
+                except Exception:
+                    pass
 
             else:
                 logger.debug(f"文档不属于当前项目，跳过刷新: {event.project_id}")
@@ -3125,7 +3297,14 @@ class MainController(QObject):
             if hasattr(self, '_main_window') and self._main_window and hasattr(self._main_window, 'editor_widget'):
                 editor = self._main_window.editor_widget
                 if hasattr(editor, 'rename_document_tab'):
-                    editor.rename_document_tab(document_id, new_title)
+                    try:
+                        # 优先通过 EditorBridge 调用，降低耦合
+                        if hasattr(self, '_editor_bridge') and self._editor_bridge:
+                            self._editor_bridge.rename_document_tab(document_id, new_title)
+                        else:
+                            editor.rename_document_tab(document_id, new_title)
+                    except Exception:
+                        editor.rename_document_tab(document_id, new_title)
         except Exception as e:
             logger.warning(f"处理文档重命名信号时出现问题: {e}")
 
@@ -3157,6 +3336,14 @@ class MainController(QObject):
 
                 # 重新加载项目树
                 self._main_window.project_tree.load_project(project, documents)
+
+                # 同步状态面板统计
+                try:
+                    if hasattr(self._main_window, 'status_panel') and self._main_window.status_panel:
+                        self._main_window.status_panel.set_project(project)
+                        self._main_window.status_panel.update_project_statistics(documents)
+                except Exception as se:
+                    logger.debug(f"更新状态面板统计失败: {se}")
 
                 logger.info(f"✅ 项目树已更新显示新文档")
 

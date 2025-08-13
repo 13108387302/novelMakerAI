@@ -140,22 +140,18 @@ class ProjectInfoPage(QWizardPage):
                 default_type = str(settings_service.get_setting("project.default_project_type", "novel"))
                 _apply_defaults(default_author, default_genre, default_type)
             else:
-                # 启动页场景：无项目上下文，回退读取最近项目的 user_settings.json
+                # 启动页场景：无项目上下文，回退读取全局配置 config.json
                 try:
-                    from src.shared.managers.recent_projects_manager import get_recent_projects_manager
-                    rpm = get_recent_projects_manager()
-                    recent = rpm.get_recent_projects()
-                    if recent:
-                        from pathlib import Path
-                        cfg = Path(recent[0]['path']) / ".novel_editor" / "user_settings.json"
-                        if cfg.exists():
-                            import json
-                            data = json.loads(cfg.read_text(encoding="utf-8"))
-                            pj = data.get("project", {}) if isinstance(data, dict) else {}
-                            _apply_defaults(
-                                pj.get("default_author", ""),
-                                pj.get("default_genre", ""),
-                                pj.get("default_project_type", "novel"),
+                    from config.settings import get_global_config_path
+                    cfg = get_global_config_path()
+                    if cfg.exists():
+                        import json
+                        data = json.loads(cfg.read_text(encoding="utf-8"))
+                        pj = data.get("project", {}) if isinstance(data, dict) else {}
+                        _apply_defaults(
+                            pj.get("default_author", ""),
+                            pj.get("default_genre", ""),
+                            str(pj.get("default_project_type", "novel")),
                             )
                 except Exception:
                     pass
@@ -485,7 +481,21 @@ class ProjectWizard(QWizard):
         为项目向导应用统一的主题样式，确保界面美观一致。
         """
         try:
-            # 基础样式
+            # 改为交由全局主题控制，避免与 ThemeManager 冲突
+            self.setObjectName("ProjectWizard")
+            try:
+                ids = list(self.pageIds())  # type: ignore[attr-defined]
+            except Exception:
+                ids = []
+            for pid in ids:
+                try:
+                    page = self.page(pid)
+                    if page is not None:
+                        page.setProperty("card", True)
+                except Exception:
+                    pass
+            # 移除本地 setStyleSheet
+            return
             self.setStyleSheet("""
                 QWizard {
                     background-color: #f5f5f5;
@@ -605,8 +615,8 @@ class ProjectWizard(QWizard):
                     background-color: #e8f5e8;
                 }
             """)
-
-            logger.debug("项目向导样式应用完成")
+            # 上面 return 已经生效，理论不会走到这里；保留兜底日志
+            logger.debug("项目向导样式交由 ThemeManager 统一管理")
 
         except Exception as e:
             logger.error(f"应用项目向导样式失败: {e}")

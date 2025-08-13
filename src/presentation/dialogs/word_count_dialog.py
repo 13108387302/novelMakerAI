@@ -74,6 +74,9 @@ class WordCountDialog(QDialog):
 
         logger.debug("字数统计对话框初始化完成")
 
+        # 便于主题 QSS 定位（深色适配）
+        self.setObjectName("WordCountDialog")
+
     def _setup_ui(self):
         """设置UI"""
         self.setWindowTitle("字数统计")
@@ -114,7 +117,8 @@ class WordCountDialog(QDialog):
         overview_layout.addWidget(QLabel("总字数:"), 0, 0)
         self.total_words_label = QLabel("0")
         self.total_words_label.setFont(QFont("Arial", 16, QFont.Weight.Bold))
-        # 使用主题颜色
+        # 使用主题颜色，通过属性 title 提升对比
+        self.total_words_label.setProperty("title", True)
         self.total_words_label.setStyleSheet("")
         overview_layout.addWidget(self.total_words_label, 0, 1)
 
@@ -174,7 +178,7 @@ class WordCountDialog(QDialog):
         today_layout.addWidget(QLabel("今日新增字数:"), 0, 0)
         self.today_words_label = QLabel("0")
         self.today_words_label.setFont(QFont("Arial", 14, QFont.Weight.Bold))
-        # 使用主题颜色
+        self.today_words_label.setProperty("title", True)
         self.today_words_label.setStyleSheet("")
         today_layout.addWidget(self.today_words_label, 0, 1)
 
@@ -367,151 +371,17 @@ class WordCountDialog(QDialog):
 
     def _apply_styles(self):
         """
-        应用样式 - 使用主题管理器
-
-        为字数统计对话框应用统一的主题样式。
+        应用样式 - 跟随全局主题（移除浅色硬编码）
         """
         try:
-            self.setStyleSheet("""
-                QDialog {
-                    background-color: #f8f9fa;
-                    font-family: "Microsoft YaHei", "Segoe UI", Arial, sans-serif;
-                }
+            # 清空本地硬编码样式，交给 ThemeManager 全局样式
+            self.setStyleSheet("")
 
-                QTabWidget::pane {
-                    border: 1px solid #dee2e6;
-                    border-radius: 8px;
-                    background-color: white;
-                    margin-top: 10px;
-                }
+            # 为局部控件设置 objectName，方便全局 QSS 定位
+            if hasattr(self, 'tab_widget'):
+                self.tab_widget.setObjectName("WordCountTabs")
 
-                QTabWidget::tab-bar {
-                    alignment: center;
-                }
-
-                QTabBar::tab {
-                    background-color: #e9ecef;
-                    color: #495057;
-                    border: 1px solid #dee2e6;
-                    border-bottom: none;
-                    border-radius: 8px 8px 0 0;
-                    padding: 10px 20px;
-                    margin-right: 2px;
-                    font-weight: 500;
-                }
-
-                QTabBar::tab:selected {
-                    background-color: white;
-                    color: #007bff;
-                    border-color: #007bff;
-                    border-bottom: 2px solid white;
-                }
-
-                QTabBar::tab:hover:!selected {
-                    background-color: #f8f9fa;
-                    color: #007bff;
-                }
-
-                QTreeWidget {
-                    border: 1px solid #dee2e6;
-                    border-radius: 6px;
-                    background-color: white;
-                    alternate-background-color: #f8f9fa;
-                    gridline-color: #e9ecef;
-                    font-size: 12px;
-                }
-
-                QTreeWidget::item {
-                    padding: 8px;
-                    border-bottom: 1px solid #f1f3f4;
-                }
-
-                QTreeWidget::item:selected {
-                    background-color: #007bff;
-                    color: white;
-                }
-
-                QTreeWidget::item:hover {
-                    background-color: #e3f2fd;
-                }
-
-                QTreeWidget::header {
-                    background-color: #f8f9fa;
-                    border: none;
-                    border-bottom: 2px solid #dee2e6;
-                    font-weight: bold;
-                    color: #495057;
-                }
-
-                QTreeWidget::header::section {
-                    padding: 10px;
-                    border-right: 1px solid #dee2e6;
-                }
-
-                QPushButton {
-                    background-color: #007bff;
-                    color: white;
-                    border: none;
-                    border-radius: 6px;
-                    padding: 10px 20px;
-                    font-size: 12px;
-                    font-weight: 500;
-                    min-width: 80px;
-                }
-
-                QPushButton:hover {
-                    background-color: #0056b3;
-                }
-
-                QPushButton:pressed {
-                    background-color: #004085;
-                }
-
-                QPushButton#refresh_btn {
-                    background-color: #28a745;
-                }
-
-                QPushButton#refresh_btn:hover {
-                    background-color: #1e7e34;
-                }
-
-                QPushButton#export_btn {
-                    background-color: #17a2b8;
-                }
-
-                QPushButton#export_btn:hover {
-                    background-color: #117a8b;
-                }
-
-                QPushButton#close_btn {
-                    background-color: #6c757d;
-                }
-
-                QPushButton#close_btn:hover {
-                    background-color: #545b62;
-                }
-
-                QLabel {
-                    color: #495057;
-                    font-size: 12px;
-                }
-
-                QLabel[class="title"] {
-                    font-size: 16px;
-                    font-weight: bold;
-                    color: #212529;
-                    margin-bottom: 10px;
-                }
-
-                QLabel[class="subtitle"] {
-                    font-size: 14px;
-                    font-weight: 500;
-                    color: #6c757d;
-                    margin-bottom: 5px;
-                }
-            """)
-
-            # 设置按钮ID以应用特定样式
+            # 设置按钮ID以应用特定样式（仍保留）
             if hasattr(self, 'refresh_btn'):
                 self.refresh_btn.setObjectName("refresh_btn")
             if hasattr(self, 'export_btn'):
@@ -519,7 +389,9 @@ class WordCountDialog(QDialog):
             if hasattr(self, 'close_btn'):
                 self.close_btn.setObjectName("close_btn")
 
-            logger.debug("字数统计对话框样式应用完成")
+            # 让主题管理器的全局 QSS 生效
+            # 这里不再做任何配色，全部依赖 ThemeManager 里 #WordCountDialog ... 规则
+            logger.debug("字数统计对话框样式：使用全局主题")
 
         except Exception as e:
             logger.error(f"应用字数统计对话框样式失败: {e}")

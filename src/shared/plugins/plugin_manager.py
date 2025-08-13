@@ -359,20 +359,24 @@ class PluginManager:
         return self.context.execute_hook(hook_name, *args, **kwargs)
     
     def load_all_plugins(self):
-        """加载所有插件"""
+        """加载所有插件并按配置启用（未显式禁用的默认启用）"""
         discovered = self.discover_plugins()
-        
+
         for plugin_id in discovered:
             try:
-                self.load_plugin(plugin_id)
-                
-                # 如果插件在启用列表中，则启用它
-                if plugin_id in self._config["enabled_plugins"]:
+                loaded = self.load_plugin(plugin_id)
+
+                # 默认策略：未显式放入 disabled 列表的都启用
+                if plugin_id in self._config.get("disabled_plugins", []):
+                    logger.info(f"插件 {plugin_id} 在禁用列表中，跳过启用")
+                    continue
+                # 若配置中已启用或未配置，执行启用
+                if plugin_id in self._config.get("enabled_plugins", []) or loaded:
                     self.enable_plugin(plugin_id)
-                    
+
             except Exception as e:
                 logger.error(f"加载插件 {plugin_id} 时发生错误: {e}")
-    
+
     def shutdown(self):
         """关闭插件管理器"""
         logger.info("正在关闭插件管理器...")

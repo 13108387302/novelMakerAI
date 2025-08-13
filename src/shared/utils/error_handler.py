@@ -819,10 +819,15 @@ def async_controller_error_handler(
                 # 向用户显示错误（如果需要且有显示方法）
                 if show_user_error and hasattr(self, '_show_error'):
                     # 确保在主线程中显示错误
-                    from src.shared.utils.thread_safety import ensure_main_thread_execution
-                    ensure_main_thread_execution(
-                        lambda: self._show_error(f"{op_name}失败", str(e))
-                    )
+                    from src.shared.utils.thread_safety import is_main_thread, safe_qt_call
+                    try:
+                        if is_main_thread():
+                            self._show_error(f"{op_name}失败", str(e))
+                        else:
+                            safe_qt_call(lambda: self._show_error(f"{op_name}失败", str(e)))
+                    except Exception:
+                        # 兜底：直接记录日志，避免再次抛异常
+                        logger.error("显示错误对话框失败（装饰器兜底）")
 
                 return default_return
         return wrapper

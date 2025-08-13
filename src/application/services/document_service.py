@@ -138,13 +138,9 @@ class DocumentService(BaseService):
             if success:
                 logger.info(f"💾 文档保存成功: {document.title} (ID: {document.id})")
 
-                # 发布文档创建事件
-                event = DocumentCreatedEvent(
-                    document_id=document.id,
-                    document_title=document.title,
-                    document_type=document_type,
-                    project_id=project_id
-                )
+                # 发布文档创建事件（统一助手）
+                from src.shared.utils.event_helpers import build_document_created_event
+                event = build_document_created_event(document)
                 await self.event_publisher.publish_safe(event, "文档创建")
 
                 logger.info(f"🎉 文档创建完成: {title} ({document.id})")
@@ -174,12 +170,9 @@ class DocumentService(BaseService):
                 self._open_documents[document_id] = document
                 self._current_document_id = document_id
 
-                # 发布文档打开事件
-                event = DocumentOpenedEvent(
-                    document_id=document.id,
-                    document_title=document.title,
-                    project_id=document.project_id
-                )
+                # 发布文档打开事件（统一助手）
+                from src.shared.utils.event_helpers import build_document_opened_event
+                event = build_document_opened_event(document)
                 await self.event_publisher.publish_safe(event, "文档打开")
 
                 logger.info(f"文档打开成功: {document.title} ({document.id})")
@@ -211,11 +204,9 @@ class DocumentService(BaseService):
                 if self._current_document_id == document_id:
                     self._current_document_id = None
 
-                # 发布文档关闭事件
-                event = DocumentClosedEvent(
-                    document_id=document.id,
-                    document_title=document.title
-                )
+                # 发布文档关闭事件（统一助手）
+                from src.shared.utils.event_helpers import build_document_closed_event
+                event = build_document_closed_event(document)
                 await self.event_publisher.publish_safe(event, "文档关闭")
 
                 logger.info(f"文档关闭: {document.title}")
@@ -238,13 +229,9 @@ class DocumentService(BaseService):
 
             success = await self.document_repository.save(document)
             if success:
-                # 发布文档保存事件
-                event = DocumentSavedEvent(
-                    document_id=document.id,
-                    document_title=document.title,
-                    word_count=document.statistics.word_count,
-                    character_count=document.statistics.character_count
-                )
+                # 发布文档保存事件（统一助手）
+                from src.shared.utils.event_helpers import build_document_saved_event
+                event = build_document_saved_event(document)
                 await self.event_publisher.publish_safe(event, "文档保存")
 
                 logger.info(f"文档保存成功: {document.title}")
@@ -270,12 +257,8 @@ class DocumentService(BaseService):
                     self._open_documents[document.id] = document
 
                 # 发布文档保存事件
-                event = DocumentSavedEvent(
-                    document_id=document.id,
-                    document_title=document.title,
-                    word_count=document.statistics.word_count,
-                    character_count=document.statistics.character_count
-                )
+                from src.shared.utils.event_helpers import build_document_saved_event
+                event = build_document_saved_event(document)
                 await self.event_publisher.publish_safe(event, "文档保存")
 
                 logger.info(f"文档对象保存成功: {document.title}")

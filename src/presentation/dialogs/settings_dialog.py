@@ -420,9 +420,9 @@ class SettingsDialog(QDialog):
         shortcuts_group = QGroupBox("⌨️ 快捷键设置")
         shortcuts_layout = QVBoxLayout(shortcuts_group)
 
-        # 快捷键说明
+        # 快捷键说明（使用主题的提示色，不再写死颜色）
         info_label = QLabel("双击快捷键可以修改，按ESC取消修改")
-        info_label.setStyleSheet("color: #666; font-style: italic; margin-bottom: 10px;")
+        info_label.setProperty("hint", True)
         shortcuts_layout.addWidget(info_label)
 
         # 快捷键表格（这里用简单的标签代替）
@@ -444,7 +444,8 @@ class SettingsDialog(QDialog):
             shortcut_layout.addWidget(action_label)
 
             shortcut_label = QLabel(shortcut)
-            shortcut_label.setStyleSheet("background: #f0f0f0; padding: 4px 8px; border-radius: 3px; font-family: monospace;")
+            # 使用主题色的标签样式，深色下对比更高
+            shortcut_label.setProperty("kbd", True)
             shortcut_layout.addWidget(shortcut_label)
 
             shortcut_layout.addStretch()
@@ -555,17 +556,10 @@ class SettingsDialog(QDialog):
             self.target_word_count_spin.setValue(
                 self.settings_service.get_setting("project.default_target_word_count", 80000)
             )
-            # 加载默认项目类型
-            try:
-                type_code = str(self.settings_service.get_setting("project.default_project_type", "novel")).lower()
-                code_to_label = {"novel": "小说", "essay": "散文", "poetry": "诗歌", "script": "剧本", "other": "其他"}
-                self.default_genre_combo.setCurrentText(code_to_label.get(type_code, "小说"))
-            except Exception:
-                pass
             self.auto_open_last_project_check.setChecked(
                 self.settings_service.get_auto_open_last_project()
             )
-
+            
             # 加载编辑器设置
             self.font_size_spin.setValue(
                 self.settings_service.get_setting("ui.font_size", 12)
@@ -589,16 +583,9 @@ class SettingsDialog(QDialog):
         try:
             # 保存常规设置
             self.settings_service.set_setting(
-                "project.default_author",
+                "project.default_author", 
                 self.default_author_edit.text()
             )
-            # 保存默认项目类型（中文到代码映射）
-            try:
-                label = self.default_genre_combo.currentText()
-                label_to_code = {"小说": "novel", "散文": "essay", "诗歌": "poetry", "剧本": "script", "其他": "other"}
-                self.settings_service.set_setting("project.default_project_type", label_to_code.get(label, "novel"))
-            except Exception:
-                pass
             self.settings_service.set_setting(
                 "project.default_target_word_count",
                 self.target_word_count_spin.value()
@@ -606,7 +593,7 @@ class SettingsDialog(QDialog):
             self.settings_service.set_auto_open_last_project(
                 self.auto_open_last_project_check.isChecked()
             )
-
+            
             # 保存编辑器设置
             self.settings_service.set_setting(
                 "ui.font_size",

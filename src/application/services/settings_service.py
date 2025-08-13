@@ -56,28 +56,19 @@ class SettingsService(BaseConfigManager):
         self.settings = settings
         self.event_bus = event_bus
 
-        # 调用父类构造函数（使用项目内配置目录）
-        from src.shared.project_context import ProjectPaths
-        from src.shared.ioc.container import get_global_container
-        container = get_global_container()
-        if container:
-            project_paths = container.try_get(ProjectPaths)
-            if project_paths:
-                super().__init__(project_paths.config_dir)
-            else:
-                raise RuntimeError("SettingsService需要项目上下文，但未找到ProjectPaths")
-        else:
-            raise RuntimeError("SettingsService需要全局容器，但未找到")
+        # 调用父类构造函数（使用全局配置目录，单一配置文件）
+        from config.settings import get_global_config_dir
+        super().__init__(get_global_config_dir())
 
         # 迁移设置（添加缺失的字段）
         self._migrate_settings()
 
-        # 从主配置同步设置
-        self.sync_from_main_config()
+        # 从主配置同步设置（保留已有用户偏好，避免覆盖）
+        self.sync_from_main_config(preserve_user_values=True)
 
     def get_config_file_name(self) -> str:
-        """获取配置文件名"""
-        return "user_settings.json"
+        """获取配置文件名（统一：config.json）"""
+        return "config.json"
 
     def get_default_config(self) -> Dict[str, Any]:
         """获取默认配置"""
@@ -233,9 +224,9 @@ class SettingsService(BaseConfigManager):
         return self.get(key, default)
     
     def set_setting(self, key: str, value: Any) -> bool:
-        """设置值"""
+        """设置值，并在特定键变更时触发对应的运行时行为（如主题热更新）"""
         try:
-            # 获取旧值用于事件发布
+            # 获取旧值用于事件发布/幂等判断
             old_value = self.get(key)
 
             # 使用基类的set方法
@@ -245,6 +236,26 @@ class SettingsService(BaseConfigManager):
             self._sync_to_main_config(key, value)
 
             if success:
+                # 主题热更新：当 ui.theme 变更时，立即应用到 ThemeManager（避免循环：仅在实际不同再应用）
+                if key == "ui.theme":
+                    try:
+                        from src.shared.ioc.container import get_global_container
+                        container = get_global_container()
+                        if container is not None:
+                            from src.presentation.styles.theme_manager import ThemeManager, ThemeType
+                            tm = container.try_get(ThemeManager)
+                            if tm is not None:
+                                # 规范化目标主题
+                                name = str(value or "").strip().lower()
+                                mapping = {"light": ThemeType.LIGHT, "dark": ThemeType.DARK, "auto": ThemeType.AUTO}
+                                target = mapping.get(name, ThemeType.DARK)
+                                # 与当前一致则不重复应用，防止触发 ThemeManager->signal->_on_theme_changed->set_setting 循环
+                                current = tm.get_current_theme()
+                                if current != target:
+                                    tm.set_theme(target)
+                    except Exception as e:
+                        logger.debug(f"应用主题热更新时出现问题（已忽略）：{e}")
+
                 # 发布设置变更事件（线程安全方式）
                 try:
                     from src.domain.events.ai_events import AIConfigurationChangedEvent
@@ -256,11 +267,9 @@ class SettingsService(BaseConfigManager):
 
                     # 检查是否有运行的事件循环
                     try:
-                        loop = asyncio.get_running_loop()
-                        # 如果有事件循环，创建任务
+                        _ = asyncio.get_running_loop()
                         asyncio.create_task(self.event_bus.publish_async(event))
                     except RuntimeError:
-                        # 没有事件循环，使用同步方式或跳过事件发布
                         logger.debug(f"没有运行的事件循环，跳过事件发布: {key}")
                         pass
 
@@ -617,16 +626,26 @@ class SettingsService(BaseConfigManager):
         except Exception as e:
             logger.warning(f"同步配置到主配置失败: {key}, {e}")
 
-    def sync_from_main_config(self) -> bool:
-        """从主配置对象同步设置"""
+    def sync_from_main_config(self, preserve_user_values: bool = True) -> bool:
+        """从主配置对象同步设置
+        Args:
+            preserve_user_values: 为 True 时，若用户设置中已存在值，则不覆盖（避免把用户的 ui.theme 等偏好重置为默认）
+        """
         try:
             # 同步UI配置
             ui_settings = self.settings.ui
-            self.set("ui.theme", ui_settings.theme, save_immediately=False)
-            self.set("ui.font_family", ui_settings.font_family, save_immediately=False)
-            self.set("ui.font_size", ui_settings.font_size, save_immediately=False)
-            self.set("ui.auto_save_interval", ui_settings.auto_save_interval, save_immediately=False)
-            self.set("ui.recent_projects_count", ui_settings.recent_projects_count, save_immediately=False)
+            # 主题：优先保留用户设置的值
+            if not (preserve_user_values and self.get("ui.theme", None) is not None):
+                self.set("ui.theme", ui_settings.theme, save_immediately=False)
+            # 其余UI配置按主配置同步（通常无用户主动更改，或覆盖风险低）
+            if not (preserve_user_values and self.get("ui.font_family", None) is not None):
+                self.set("ui.font_family", ui_settings.font_family, save_immediately=False)
+            if not (preserve_user_values and self.get("ui.font_size", None) is not None):
+                self.set("ui.font_size", ui_settings.font_size, save_immediately=False)
+            if not (preserve_user_values and self.get("ui.auto_save_interval", None) is not None):
+                self.set("ui.auto_save_interval", ui_settings.auto_save_interval, save_immediately=False)
+            if not (preserve_user_values and self.get("ui.recent_projects_count", None) is not None):
+                self.set("ui.recent_projects_count", ui_settings.recent_projects_count, save_immediately=False)
 
             # 同步AI配置
             ai_settings = self.settings.ai_service

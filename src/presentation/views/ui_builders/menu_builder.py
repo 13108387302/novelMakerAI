@@ -106,14 +106,20 @@ class MenuBuilder(QObject):
         file_menu.addAction(import_action)
         self.actions["import_project"] = import_action
         
-        # 导出
+        # 导出（项目）
         export_action = QAction("导出项目(&E)", main_window)
         export_action.triggered.connect(lambda: self._emit_action("export_project", export_action))
         file_menu.addAction(export_action)
         self.actions["export_project"] = export_action
-        
+
+        # 导出（当前文档）
+        export_doc_action = QAction("导出当前文档(&D)", main_window)
+        export_doc_action.triggered.connect(lambda: self._emit_action("export_document", export_doc_action))
+        file_menu.addAction(export_doc_action)
+        self.actions["export_document"] = export_doc_action
+
         file_menu.addSeparator()
-        
+
         # 退出
         exit_action = QAction("退出(&X)", main_window)
         exit_action.setShortcut(QKeySequence("Ctrl+Q"))
@@ -224,6 +230,27 @@ class MenuBuilder(QObject):
 
         view_menu.addSeparator()
 
+        # 主题
+        theme_menu = QMenu("主题(&T)", view_menu)
+        view_menu.addMenu(theme_menu)
+
+        theme_light_action = QAction("浅色", main_window)
+        theme_light_action.triggered.connect(lambda: self._emit_action("set_theme_light", theme_light_action))
+        theme_menu.addAction(theme_light_action)
+        self.actions["set_theme_light"] = theme_light_action
+
+        theme_dark_action = QAction("深色", main_window)
+        theme_dark_action.triggered.connect(lambda: self._emit_action("set_theme_dark", theme_dark_action))
+        theme_menu.addAction(theme_dark_action)
+        self.actions["set_theme_dark"] = theme_dark_action
+
+        theme_auto_action = QAction("跟随系统", main_window)
+        theme_auto_action.triggered.connect(lambda: self._emit_action("set_theme_auto", theme_auto_action))
+        theme_menu.addAction(theme_auto_action)
+        self.actions["set_theme_auto"] = theme_auto_action
+
+        view_menu.addSeparator()
+
         # 语法高亮
         syntax_highlight_action = QAction("语法高亮(&S)", main_window)
         syntax_highlight_action.setCheckable(True)
@@ -275,15 +302,21 @@ class MenuBuilder(QObject):
         backup_action.triggered.connect(lambda: self._emit_action("backup_management", backup_action))
         tools_menu.addAction(backup_action)
         self.actions["backup_management"] = backup_action
-        
+
+        # 插件管理器
+        plugin_mgr_action = QAction("插件管理器(&P)", main_window)
+        plugin_mgr_action.triggered.connect(lambda: self._emit_action("plugin_manager", plugin_mgr_action))
+        tools_menu.addAction(plugin_mgr_action)
+        self.actions["plugin_manager"] = plugin_mgr_action
+
         tools_menu.addSeparator()
-        
+
         # 设置
         settings_action = QAction("设置(&S)", main_window)
         settings_action.triggered.connect(lambda: self._emit_action("settings", settings_action))
         tools_menu.addAction(settings_action)
         self.actions["settings"] = settings_action
-        
+
     def _create_help_menu(self, menubar: QMenuBar, main_window):
         """创建帮助菜单"""
         help_menu = menubar.addMenu("帮助(&H)")

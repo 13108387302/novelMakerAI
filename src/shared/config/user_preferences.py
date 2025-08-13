@@ -20,8 +20,8 @@ from src.shared.constants import (
 
 logger = get_logger(__name__)
 
-# 用户偏好设置常量
-USER_PREFERENCES_FILE = "user_preferences.json"
+# 统一：用户偏好设置并入全局单一配置文件
+USER_PREFERENCES_FILE = "config.json"  # 与 SettingsService 一致，存放于全局 .novel_editor/ 下
 
 
 class UserPreferences(BaseConfigManager):
@@ -32,7 +32,7 @@ class UserPreferences(BaseConfigManager):
         初始化用户偏好设置管理器
 
         Args:
-            config_dir: 配置文件目录（必须提供，通常为项目内路径）
+            config_dir: 配置文件目录（兼容参数，建议传入全局配置目录）
         """
         # 调用父类构造函数
         super().__init__(config_dir)
@@ -131,8 +131,13 @@ class UserPreferences(BaseConfigManager):
 _user_preferences = None
 
 def get_user_preferences(config_dir: Path) -> UserPreferences:
-    """获取用户偏好设置实例（基于项目配置目录）"""
+    """获取用户偏好设置实例（全局配置目录）。参数仅为向后兼容，可忽略传入。"""
     global _user_preferences
     if _user_preferences is None:
-        _user_preferences = UserPreferences(config_dir)
+        try:
+            from config.settings import get_global_config_dir
+            cfg_dir = get_global_config_dir()
+        except Exception:
+            cfg_dir = config_dir
+        _user_preferences = UserPreferences(cfg_dir)
     return _user_preferences

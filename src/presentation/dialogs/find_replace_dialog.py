@@ -275,6 +275,9 @@ class FindReplaceDialog(QDialog):
     def _apply_styles(self):
         """应用样式 - 使用主题管理器"""
         try:
+            # 交由全局 ThemeManager 管控，避免对全局样式冲突
+            self.setObjectName("FindReplaceDialog")
+            return
             from src.presentation.styles.theme_manager import ThemeManager
             theme_manager = ThemeManager()
 

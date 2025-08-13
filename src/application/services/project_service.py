@@ -166,13 +166,9 @@ class ProjectService(BaseService):
                 # 设置为当前项目
                 self._current_project = saved_project
 
-                # 发布项目创建事件
-                event = ProjectCreatedEvent(
-                    project_id=saved_project.id,
-                    project_name=saved_project.title,
-                    project_path=str(saved_project.root_path) if saved_project.root_path else None
-                )
-                # 使用统一的事件发布方法
+                # 发布项目创建事件（统一助手）
+                from src.shared.utils.project_event_helpers import build_project_created_event
+                event = build_project_created_event(saved_project)
                 await self.event_publisher.publish_safe(event, "项目创建")
 
                 logger.info(f"项目创建成功: {name} ({saved_project.id})")
@@ -201,12 +197,9 @@ class ProjectService(BaseService):
                 # 设置为当前项目
                 self._current_project = project
 
-                # 发布项目打开事件
-                event = ProjectOpenedEvent(
-                    project_id=project.id,
-                    project_name=project.title,
-                    project_path=str(project.root_path) if project.root_path else ""
-                )
+                # 发布项目打开事件（统一助手）
+                from src.shared.utils.project_event_helpers import build_project_opened_event
+                event = build_project_opened_event(project)
                 await self.event_publisher.publish_safe(event, "项目打开")
 
                 logger.info(f"项目打开成功: {project.title} ({project.id}) -> {project.root_path}")
@@ -253,11 +246,9 @@ class ProjectService(BaseService):
                 # 保存项目
                 await self.save_current_project()
 
-                # 发布项目关闭事件
-                event = ProjectClosedEvent(
-                    project_id=self._current_project.id,
-                    project_name=self._current_project.title
-                )
+                # 发布项目关闭事件（统一助手）
+                from src.shared.utils.project_event_helpers import build_project_closed_event
+                event = build_project_closed_event(self._current_project)
                 await self.event_publisher.publish_safe(event, "项目关闭")
 
                 logger.info(f"项目关闭: {self._current_project.title}")
@@ -277,12 +268,9 @@ class ProjectService(BaseService):
             if self._current_project:
                 success = await self.project_repository.save(self._current_project)
                 if success:
-                    # 发布项目保存事件
-                    event = ProjectSavedEvent(
-                        project_id=self._current_project.id,
-                        project_name=self._current_project.title,
-                        save_path=str(self._current_project.root_path) if self._current_project.root_path else ""
-                    )
+                    # 发布项目保存事件（统一助手）
+                    from src.shared.utils.project_event_helpers import build_project_saved_event
+                    event = build_project_saved_event(self._current_project)
                     await self.event_publisher.publish_safe(event, "项目保存")
 
                     logger.info(f"项目保存成功: {self._current_project.title}")
@@ -492,12 +480,9 @@ class ProjectService(BaseService):
             if saved:
                 logger.info(f"项目另存为成功: {project.title} -> {file_path}")
 
-                # 发布项目保存事件
-                event = ProjectSavedEvent(
-                    project_id=project.id,
-                    project_name=project.title,
-                    save_path=str(file_path)
-                )
+                # 发布项目保存事件（统一助手，覆盖保存路径）
+                from src.shared.utils.project_event_helpers import build_project_saved_event
+                event = build_project_saved_event(project, file_path)
                 await self.event_publisher.publish_safe(event, "项目保存")
                 return True
             else:

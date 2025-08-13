@@ -11,7 +11,7 @@ from typing import Dict, List, Optional
 from datetime import datetime
 
 from .import_export.base import (
-    IImportExportService, IFormatHandler, 
+    IImportExportService, IFormatHandler,
     ExportOptions, ImportOptions, ExportResult, ImportResult
 )
 from .import_export.json_handler import JsonFormatHandler
@@ -73,26 +73,26 @@ class ImportExportService(IImportExportService):
 
         # 初始化默认格式处理器
         self._init_default_handlers()
-        
+
     def _init_default_handlers(self):
         """初始化默认格式处理器"""
         try:
             # JSON处理器
             self.register_format_handler("json", JsonFormatHandler(self))
-            
+
             # 文本处理器
             self.register_format_handler("txt", TextFormatHandler(self))
             self.register_format_handler("text", TextFormatHandler(self))
-            
+
             # Markdown处理器
             self.register_format_handler("md", MarkdownFormatHandler(self))
             self.register_format_handler("markdown", MarkdownFormatHandler(self))
-            
+
             # 尝试加载可选的格式处理器
             self._try_load_optional_handlers()
-            
+
             logger.info(f"已注册 {len(self._format_handlers)} 个格式处理器")
-            
+
         except Exception as e:
             logger.error(f"初始化格式处理器失败: {e}")
 
@@ -148,23 +148,23 @@ class ImportExportService(IImportExportService):
         """从文件路径检测格式"""
         if not file_path:
             return None
-            
+
         suffix = file_path.suffix.lower()
         if suffix.startswith('.'):
             suffix = suffix[1:]
-            
+
         return suffix if suffix in self._format_handlers else None
 
     async def export_project(
-        self, 
-        project_id: str, 
-        output_path: Path, 
-        format_type: str, 
+        self,
+        project_id: str,
+        output_path: Path,
+        format_type: str,
         options: ExportOptions
     ) -> ExportResult:
         """导出项目"""
         start_time = datetime.now()
-        
+
         try:
             # 获取项目（兼容自定义根路径的项目：先按ID文件，再按索引/路径加载）
             project = await self.project_repository.get_by_id(project_id)
@@ -251,14 +251,14 @@ class ImportExportService(IImportExportService):
             )
 
     async def import_project(
-        self, 
-        input_path: Path, 
-        format_type: str, 
+        self,
+        input_path: Path,
+        format_type: str,
         options: ImportOptions
     ) -> ImportResult:
         """导入项目"""
         start_time = datetime.now()
-        
+
         try:
             # 验证输入文件
             if not input_path.exists():
@@ -286,7 +286,7 @@ class ImportExportService(IImportExportService):
 
             # 执行导入
             result = await handler.import_project(input_path, options)
-            
+
             # 发布事件
             if result.success:
                 try:
@@ -298,7 +298,7 @@ class ImportExportService(IImportExportService):
                     await self.event_bus.publish_async(event)
                 except Exception as e:
                     logger.warning(f"发布项目导入事件失败: {e}")
-                
+
             return result
 
         except Exception as e:
@@ -310,18 +310,18 @@ class ImportExportService(IImportExportService):
             )
 
     async def export_document(
-        self, 
-        document_id: str, 
-        output_path: Path, 
-        format_type: str, 
+        self,
+        document_id: str,
+        output_path: Path,
+        format_type: str,
         options: ExportOptions
     ) -> ExportResult:
         """导出文档"""
         start_time = datetime.now()
-        
+
         try:
             # 获取文档
-            document = await self.document_repository.get_by_id(document_id)
+            document = await self.document_repository.load(document_id)
             if not document:
                 return ExportResult(
                     success=False,
@@ -347,20 +347,19 @@ class ImportExportService(IImportExportService):
 
             # 执行导出
             result = await handler.export_document(document, output_path, options)
-            
+
             # 发布事件
             if result.success:
                 try:
                     event = DocumentExportedEvent(
                         document_id=document_id,
                         export_path=str(output_path),
-                        format_type=format_type,
-                        export_time=datetime.now()
+                        export_format=format_type
                     )
                     await self.event_bus.publish_async(event)
                 except Exception as e:
                     logger.warning(f"发布文档导出事件失败: {e}")
-                
+
             return result
 
         except Exception as e:
@@ -372,14 +371,14 @@ class ImportExportService(IImportExportService):
             )
 
     async def import_document(
-        self, 
-        input_path: Path, 
-        format_type: str, 
+        self,
+        input_path: Path,
+        format_type: str,
         options: ImportOptions
     ) -> ImportResult:
         """导入文档"""
         start_time = datetime.now()
-        
+
         try:
             # 验证输入文件
             if not input_path.exists():
@@ -407,7 +406,7 @@ class ImportExportService(IImportExportService):
 
             # 执行导入
             result = await handler.import_document(input_path, options)
-            
+
             # 发布事件
             if result.success:
                 try:
@@ -419,8 +418,7 @@ class ImportExportService(IImportExportService):
                     await self.event_bus.publish_async(event)
                 except Exception as e:
                     logger.warning(f"发布文档导入事件失败: {e}")
-                
-            return result
+                return result
 
         except Exception as e:
             logger.error(f"导入文档失败: {e}")
@@ -430,10 +428,30 @@ class ImportExportService(IImportExportService):
                 import_time=(datetime.now() - start_time).total_seconds()
             )
 
+    # ========== 新增：列出已注册导出格式，供UI动态构建过滤器 ==========
+    def list_export_formats(self) -> list[tuple[str, list[str]]]:
+        """
+        返回所有已注册格式的 (显示名称, 扩展名列表) 列表。
+        显示名称来自处理器的 get_format_name()，扩展名形如 ['.md', '.markdown']。
+        """
+        formats: list[tuple[str, list[str]]] = []
+        try:
+            for _, handler in self._format_handlers.items():
+                try:
+                    name = handler.get_format_name()
+                    exts = handler.get_supported_extensions()
+                    if name and exts:
+                        formats.append((name, exts))
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        return formats
+
     def get_supported_formats(self) -> Dict[str, List[str]]:
         """获取支持的格式"""
         formats = {}
-        
+
         for format_type, handler in self._format_handlers.items():
             try:
                 format_name = handler.get_format_name()
@@ -441,7 +459,7 @@ class ImportExportService(IImportExportService):
                 formats[format_name] = extensions
             except Exception as e:
                 logger.warning(f"获取格式信息失败 {format_type}: {e}")
-                
+
         return formats
 
     def get_export_formats(self) -> List[str]:

@@ -224,11 +224,25 @@ class MainWindow(QMainWindow):
     def _create_toolbars(self):
         """创建工具栏"""
         # 主工具栏（简化版，AI功能通过AI面板访问）
-        self.toolbar_builder.build_main_toolbar(self)
+        tb = self.toolbar_builder.build_main_toolbar(self)
+        # 插件钩子：工具栏创建
+        try:
+            if hasattr(self, 'plugin_manager') and self.plugin_manager:
+                from src.shared.plugins.plugin_interface import PluginHooks
+                self.plugin_manager.execute_hook(PluginHooks.TOOLBAR_CREATED, self.toolbar_builder, self)
+        except Exception:
+            pass
 
     def _create_status_bar(self):
         """创建状态栏"""
-        self.statusbar_builder.build_status_bar(self)
+        sb = self.statusbar_builder.build_status_bar(self)
+        # 插件钩子：状态栏创建
+        try:
+            if hasattr(self, 'plugin_manager') and self.plugin_manager:
+                from src.shared.plugins.plugin_interface import PluginHooks
+                self.plugin_manager.execute_hook(PluginHooks.STATUSBAR_CREATED, self.statusbar_builder, self)
+        except Exception:
+            pass
 
     def _create_dock_widgets(self):
         """创建停靠窗口"""
@@ -251,9 +265,14 @@ class MainWindow(QMainWindow):
     def _apply_styles(self):
         """应用样式"""
         try:
-            from src.presentation.styles.theme_manager import ThemeManager
-            theme_manager = ThemeManager()
-            theme_manager.apply_theme(DEFAULT_THEME)
+            # 优先使用主应用注入的 ThemeManager，避免创建新的实例导致状态不一致
+            if hasattr(self, 'theme_manager') and self.theme_manager:
+                current = self.theme_manager.get_current_theme()
+                # 重新设置一次当前主题，确保样式表应用到 QApplication
+                self.theme_manager.set_theme(current)
+            else:
+                # 未注入时不要强行创建/应用任何主题，避免启动阶段出现意外覆盖
+                pass
         except Exception as e:
             logger.warning(f"应用主题失败: {e}")
 
@@ -261,6 +280,16 @@ class MainWindow(QMainWindow):
         """设置信号连接"""
         # 菜单动作连接
         self.menu_builder.action_triggered.connect(self._handle_menu_action)
+
+        # 向插件广播菜单创建钩子，允许插件扩展菜单（传递实际的 QMenuBar，兼容只接收一个参数的插件）
+        try:
+            from src.shared.plugins.plugin_interface import PluginHooks
+            if hasattr(self, 'plugin_manager') and self.plugin_manager:
+                menubar = self.menuBar() if hasattr(self, 'menuBar') else None
+                if menubar:
+                    self.plugin_manager.execute_hook(PluginHooks.MENU_CREATED, menubar)
+        except Exception as e:
+            logger.debug(f"广播 MENU_CREATED 钩子失败: {e}")
 
         # 工具栏动作连接
         self.toolbar_builder.action_triggered.connect(self._handle_toolbar_action)
@@ -293,12 +322,58 @@ class MainWindow(QMainWindow):
         if hasattr(self.editor_widget, 'content_changed'):
             self.editor_widget.content_changed.connect(self._update_word_count)
             self.editor_widget.content_changed.connect(self._on_content_changed)
+            # 插件钩子：文本变化（节流在插件侧或框架侧实现）
+            try:
+                from src.shared.plugins.plugin_interface import PluginHooks
+                if hasattr(self, 'plugin_manager') and self.plugin_manager:
+                    self.editor_widget.content_changed.connect(
+                        lambda doc_id, content: self.plugin_manager.execute_hook(PluginHooks.TEXT_CHANGED, doc_id, content)
+                    )
+            except Exception:
+                pass
         if hasattr(self.editor_widget, 'cursor_position_changed'):
             self.editor_widget.cursor_position_changed.connect(self._update_cursor_position)
+            # 插件钩子：光标移动
+            try:
+                from src.shared.plugins.plugin_interface import PluginHooks
+                if hasattr(self, 'plugin_manager') and self.plugin_manager:
+                    self.editor_widget.cursor_position_changed.connect(
+                        lambda doc_id, line, col: self.plugin_manager.execute_hook(PluginHooks.CURSOR_MOVED, doc_id, line, col)
+                    )
+            except Exception:
+                pass
         if hasattr(self.editor_widget, 'selection_changed'):
             self.editor_widget.selection_changed.connect(self._on_selection_changed)
+            # 插件钩子：选区变化
+            try:
+                from src.shared.plugins.plugin_interface import PluginHooks
+                if hasattr(self, 'plugin_manager') and self.plugin_manager:
+                    self.editor_widget.selection_changed.connect(
+                        lambda doc_id, text: self.plugin_manager.execute_hook(PluginHooks.SELECTION_CHANGED, doc_id, text)
+                    )
+            except Exception:
+                pass
         if hasattr(self.editor_widget, 'document_switched'):
             self.editor_widget.document_switched.connect(self._on_document_switched)
+            # 同步状态面板当前文档
+            try:
+                self.editor_widget.document_switched.connect(
+                    lambda doc_id: (self.status_panel.set_document(self.editor_widget.get_current_tab().document)
+                                     if hasattr(self, 'status_panel') and self.status_panel and
+                                     hasattr(self.editor_widget, 'get_current_tab') and self.editor_widget.get_current_tab()
+                                     else None)
+                )
+            except Exception:
+                pass
+            # 插件钩子：文档切换 -> 作为 DOCUMENT_OPENED 的补充（文档标签激活时触发）
+            try:
+                from src.shared.plugins.plugin_interface import PluginHooks
+                if hasattr(self, 'plugin_manager') and self.plugin_manager:
+                    self.editor_widget.document_switched.connect(
+                        lambda doc_id: self.plugin_manager.execute_hook(PluginHooks.DOCUMENT_OPENED, self.editor_widget.get_current_tab().document)
+                    )
+            except Exception:
+                pass
         if hasattr(self.editor_widget, 'save_requested'):
             self.editor_widget.save_requested.connect(self.controller.save_document)
 
@@ -462,6 +537,34 @@ class MainWindow(QMainWindow):
                 self.controller.import_project()
             elif action_name == "export_project":
                 self.controller.export_project()
+            elif action_name == "export_document":
+                self.controller.export_current_document()
+            # 主题菜单
+            elif action_name == "set_theme_light":
+                from src.presentation.styles.theme_manager import ThemeType
+                self.theme_manager.set_theme(ThemeType.LIGHT)
+                try:
+                    # 持久化到全局 config.json（唯一来源）
+                    if hasattr(self, 'controller') and hasattr(self.controller, 'settings_service') and self.controller.settings_service:
+                        self.controller.settings_service.set_setting("ui.theme", "light")
+                except Exception:
+                    pass
+            elif action_name == "set_theme_dark":
+                from src.presentation.styles.theme_manager import ThemeType
+                self.theme_manager.set_theme(ThemeType.DARK)
+                try:
+                    if hasattr(self, 'controller') and hasattr(self.controller, 'settings_service') and self.controller.settings_service:
+                        self.controller.settings_service.set_setting("ui.theme", "dark")
+                except Exception:
+                    pass
+            elif action_name == "set_theme_auto":
+                from src.presentation.styles.theme_manager import ThemeType
+                self.theme_manager.set_theme(ThemeType.AUTO)
+                try:
+                    if hasattr(self, 'controller') and hasattr(self.controller, 'settings_service') and self.controller.settings_service:
+                        self.controller.settings_service.set_setting("ui.theme", "auto")
+                except Exception:
+                    pass
             elif action_name == "exit":
                 self.close()
 
@@ -516,6 +619,12 @@ class MainWindow(QMainWindow):
                     logger.warning("控制器未实现字数统计处理方法")
             elif action_name == "backup_management":
                 self.controller.backup_management()
+            elif action_name == "plugin_manager":
+                # 打开插件管理器
+                if hasattr(self.controller, 'show_plugin_manager'):
+                    self.controller.show_plugin_manager()
+                else:
+                    logger.warning("控制器未实现插件管理器入口")
             elif action_name == "settings":
                 self.controller.settings()
             elif action_name == "new_document":
@@ -669,6 +778,14 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
+            # 插件钩子：项目打开
+            try:
+                if hasattr(self, 'plugin_manager') and self.plugin_manager:
+                    from src.shared.plugins.plugin_interface import PluginHooks
+                    self.plugin_manager.execute_hook(PluginHooks.PROJECT_OPENED, project)
+            except Exception:
+                pass
+
             ui_time = time.time() - start_time
             logger.info(f"⚡ 项目打开事件处理完成，UI响应时间: {ui_time:.3f}s")
 
@@ -714,7 +831,7 @@ class MainWindow(QMainWindow):
                         logger.info(f"📋 文档数据获取完成: {len(documents)} 个文档, 耗时: {doc_load_time:.3f}s")
                         logger.info(f"🔍 准备更新项目树，文档列表: {[doc.title for doc in documents[:3]]}")  # 显示前3个文档标题
 
-                        # 使用控制器的安全回调机制更新项目树
+                        # 使用控制器的安全回调机制更新项目树 + 同步状态面板统计
                         logger.info(f"⏰ 调度项目树更新任务，文档数量: {len(documents)}")
 
                         def update_project_tree_with_docs():
@@ -724,6 +841,13 @@ class MainWindow(QMainWindow):
 
                                 # 重新加载项目树，这次传入完整的文档列表
                                 self.project_tree.load_project(project, documents)
+                                # 同步状态面板统计
+                                try:
+                                    if hasattr(self, 'status_panel') and self.status_panel:
+                                        self.status_panel.set_project(project)
+                                        self.status_panel.update_project_statistics(documents)
+                                except Exception as se:
+                                    logger.debug(f"更新状态面板统计失败: {se}")
 
                                 update_time = time.time() - update_start_time
                                 logger.info(f"✅ 项目树文档更新完成: {project.title}, 文档数量: {len(documents)}, 耗时: {update_time:.3f}s")
@@ -1006,7 +1130,7 @@ class MainWindow(QMainWindow):
     def _on_ai_settings_updated(self):
         """AI设置更新后的处理"""
         try:
-            # 重新同步设置服务（保证缓存在 user_settings.json 的值进入运行态）
+            # 重新同步设置服务（全局 config.json 生效到运行态）
             if hasattr(self.controller, 'settings_service'):
                 settings_service = self.controller.settings_service
                 settings_service.sync_from_main_config()

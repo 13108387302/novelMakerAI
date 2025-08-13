@@ -91,11 +91,11 @@ class ApplicationService:
         """设置事件订阅"""
         # 订阅项目相关事件（如果事件类可用）
         if ProjectCreatedEvent:
-            self.event_bus.subscribe(ProjectCreatedEvent, self._on_project_created)
+            self.event_bus.subscribe(ProjectCreatedEvent, self._on_project_created, subscriber=self)
         if ProjectOpenedEvent:
-            self.event_bus.subscribe(ProjectOpenedEvent, self._on_project_opened)
+            self.event_bus.subscribe(ProjectOpenedEvent, self._on_project_opened, subscriber=self)
         if ProjectClosedEvent:
-            self.event_bus.subscribe(ProjectClosedEvent, self._on_project_closed)
+            self.event_bus.subscribe(ProjectClosedEvent, self._on_project_closed, subscriber=self)
 
         logger.info("事件订阅设置完成")
     

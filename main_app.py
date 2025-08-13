@@ -18,12 +18,13 @@ sys.path.insert(0, str(PROJECT_ROOT))
 # 使用标准asyncio，不依赖qasync
 
 from PyQt6.QtWidgets import QApplication, QMessageBox
-from PyQt6.QtCore import QTimer
+# from PyQt6.QtCore import QSettings  # 已禁用：统一仅使用全局 config.json
 
 # 导入重构后的组件
 from src.shared.ioc.container import Container
 from src.shared.events.event_bus import EventBus
 from src.shared.utils.logger import setup_logging, get_logger
+logger = get_logger(__name__)
 from src.presentation.views.main_window import MainWindow
 from src.presentation.controllers.main_controller import MainController
 from src.presentation.styles.theme_manager import ThemeManager, ThemeType
@@ -37,11 +38,11 @@ try:
     from src.application.services.ai.core.ai_orchestration_service import AIOrchestrationService
     from src.application.services.ai.intelligence.ai_intelligence_service import AIIntelligenceService
     _new_ai_available = True
-    print("✅ 新架构AI服务导入成功")
+    logger.info("✅ 新架构AI服务导入成功")
 except ImportError as e:
-    print(f"⚠️ 新架构AI服务导入失败: {e}")
+    logger.warning(f"⚠️ 新架构AI服务导入失败: {e}")
     import traceback
-    print(f"详细错误: {traceback.format_exc()}")
+    logger.debug(f"详细错误: {traceback.format_exc()}")
 
     # 创建一个占位符AI服务类
     class AIService:
@@ -130,6 +131,10 @@ class AINovelEditorApp:
         # 事件循环管理
         self._event_loop: Optional[asyncio.AbstractEventLoop] = None
         self._is_shutting_down: bool = False
+
+        # 用户主题覆盖（本会话内优先级最高）
+        self._user_theme_override: Optional[str] = None
+        self._last_user_theme_change_ts: Optional[float] = None
 
         logger.info("AI小说编辑器应用程序初始化")
 
@@ -241,9 +246,9 @@ class AINovelEditorApp:
 
         # 如果稍后有项目上下文，注册 ProjectPaths 到容器以影响 ServiceRegistry 的 data_dir
         try:
-            from src.shared.project_context import ProjectPaths
-            # 暂不注册，待“打开项目”后再注册具体实例
-            pass
+            # 延迟到项目打开后再注册 ProjectPaths（此处只探测模块存在性）
+            import importlib
+            importlib.import_module('src.shared.project_context')
         except Exception:
             pass
 
@@ -251,11 +256,26 @@ class AINovelEditorApp:
         from src.shared.ioc.container import set_global_container
         set_global_container(self.container)
 
-        # 创建事件总线
+        # 创建事件总线并启动后台处理，同时设置为全局实例（供 get_event_bus 使用）
         self.event_bus = EventBus()
+        try:
+            self.event_bus.start_in_background()
+        except Exception:
+            pass
+        try:
+            from src.shared.events.event_bus import set_event_bus
+            set_event_bus(self.event_bus)
+        except Exception:
+            pass
 
         # 创建主题管理器
         self.theme_manager = ThemeManager()
+
+        # 在创建主窗口之前先应用主题，避免主窗口初始化时先套用默认深色
+        try:
+            self._apply_theme()
+        except Exception:
+            pass
 
         # 插件管理器将在UI创建时初始化，避免过早创建
         self.plugin_manager = None
@@ -367,6 +387,8 @@ class AINovelEditorApp:
                 ai_intelligence_service = self.container.get(AIIntelligenceService)
 
                 if ai_orchestration_service and ai_intelligence_service:
+                    # 显式导入 SettingsService，避免未定义引用
+                    from src.application.services.settings_service import SettingsService
                     settings_service = self.container.get(SettingsService)
                     initialize_ai_component_factory(
                         ai_orchestration_service,
@@ -394,14 +416,51 @@ class AINovelEditorApp:
 
         # 创建主窗口
         self.main_window = MainWindow(self.main_controller)
+        # 将主窗口暴露给插件上下文（供插件通过 get_api('main_window') 获取）
+        try:
+            setattr(self, 'main_window', self.main_window)
+        except Exception:
+            pass
 
         # 设置控制器的主窗口引用
         self.main_controller.set_main_window(self.main_window)
 
+        # 注入容器和插件管理器，方便控制器/窗口内部使用
+        try:
+            setattr(self.main_controller, 'container', self.container)
+            setattr(self.main_controller, 'plugin_manager', self.plugin_manager)
+            setattr(self.main_window, 'plugin_manager', self.plugin_manager)
+            # 向插件上下文注入 editor_service
+            from src.shared.plugins.editor_service import EditorService
+            bridge_getter = lambda: getattr(self.main_controller, '_editor_bridge', None)
+            editor_service = EditorService(bridge_getter, lambda: self.main_window)
+            # 通过 app_context 暴露给插件（PluginContext.get_api 使用 app_context 属性查找）
+            setattr(self, 'editor_service', editor_service)
+        except Exception:
+            pass
+
         # AI助手管理器已通过主控制器传递给编辑器
 
-        # 设置主题管理器到主窗口
+        # 设置主题管理器到主窗口并立即应用一次主题
+        # 统一来源：SettingsService（移除 QSettings 对齐逻辑）
+        try:
+            from src.shared.ioc.container import get_global_container
+            container = get_global_container()
+            if container is not None:
+                from src.application.services.settings_service import SettingsService
+                ss = container.try_get(SettingsService)
+                if ss is not None and not ss.get_setting("ui.theme", None):
+                    # 若未设置，使用主配置默认值写入一次
+                    ss.set_setting("ui.theme", getattr(self.settings.ui, 'theme', 'dark'))
+        except Exception:
+            pass
+
         self.main_window.theme_manager = self.theme_manager
+        try:
+            # 首次应用主题（根据设置决定 light/dark/auto）
+            self._apply_theme()
+        except Exception:
+            pass
 
         # 连接信号
         self._connect_signals()
@@ -442,12 +501,49 @@ class AINovelEditorApp:
     def _apply_theme(self):
         """应用主题"""
         try:
-            # 从设置中获取主题（如果设置可用）
-            if self.settings:
-                theme_name = self.settings.ui.theme
-            else:
-                # 使用默认主题
-                theme_name = "light"
+            # 统一来源优先级：SettingsService -> 主配置 -> 默认值
+            logger.warning("[Theme] Start applying theme…")
+            theme_name = None
+            source = "default"
+
+            try:
+                # 通过容器尝试获取 SettingsService
+                from src.shared.ioc.container import get_global_container
+                container = get_global_container()
+                logger.warning(f"[Theme] Container present: {container is not None}")
+                if container is not None:
+                    from src.application.services.settings_service import SettingsService
+                    ss = container.try_get(SettingsService)
+                    logger.warning(f"[Theme] SettingsService available: {ss is not None}")
+                    if ss is not None:
+                        theme_name = ss.get_setting('ui.theme', None)
+                        if theme_name:
+                            source = "settings_service"
+                        logger.warning(f"[Theme] SettingsService ui.theme -> {theme_name}")
+            except Exception as e:
+                logger.warning(f"[Theme] Read from SettingsService failed: {e}")
+
+            if not theme_name:
+                # 优先退回到全局配置文件（无论是否已加载项目）
+                try:
+                    from config.settings import get_settings_for_project
+                    theme_name = getattr(get_settings_for_project(Path("/")), 'ui', None)
+                    theme_name = getattr(theme_name, 'theme', None)
+                    if theme_name:
+                        source = "global_config_file"
+                    logger.warning(f"[Theme] Fallback global config ui.theme -> {theme_name}")
+                except Exception as e:
+                    logger.warning(f"[Theme] Read global config failed: {e}")
+
+            if not theme_name:
+                if self.settings and getattr(self.settings, 'ui', None):
+                    theme_name = getattr(self.settings.ui, 'theme', None)
+                    if theme_name:
+                        source = "main_config"
+                    logger.warning(f"[Theme] Fallback main config settings.ui.theme -> {theme_name}")
+
+            theme_name = (theme_name or "dark").strip().lower()
+            logger.warning(f"[Theme] Resolved theme_name -> {theme_name} (source={source})")
 
             if theme_name == "dark":
                 theme_type = ThemeType.DARK
@@ -456,10 +552,21 @@ class AINovelEditorApp:
             else:
                 theme_type = ThemeType.LIGHT
 
+            logger.warning(f"[Theme] Applying ThemeType -> {theme_type}")
             # 应用主题
-            self.theme_manager.set_theme(theme_type)
-
-            logger.info(f"主题应用完成: {theme_name}")
+            ok = self.theme_manager.set_theme(theme_type)
+            try:
+                # 将最终应用的主题写入全局 config.json（通过 SettingsService）
+                from src.shared.ioc.container import get_global_container
+                container = get_global_container()
+                if container is not None:
+                    from src.application.services.settings_service import SettingsService
+                    ss = container.try_get(SettingsService)
+                    if ss is not None:
+                        ss.set_setting('ui.theme', theme_name)
+            except Exception as e:
+                logger.warning(f"[Theme] Persist via SettingsService failed: {e}")
+            logger.warning(f"[Theme] Applied. name={theme_name}, success={ok}")
 
         except Exception as e:
             logger.error(f"应用主题失败: {e}")
@@ -576,13 +683,37 @@ class AINovelEditorApp:
 
 
     def _on_theme_changed(self, theme_name: str):
-        """主题变更处理"""
+        """主题变更处理（统一持久化：SettingsService）"""
         logger.info(f"主题已变更: {theme_name}")
 
-        # 保存主题设置
-        if self.app_service:
-            settings_service = self.container.get(SettingsService)
-            settings_service.set_setting("ui.theme", theme_name)
+        # 规范化名称
+        try:
+            from src.presentation.styles.theme_manager import ThemeType
+            if isinstance(theme_name, ThemeType):
+                name = theme_name.value
+            else:
+                name = str(theme_name)
+            name = (name or "dark").strip().lower()
+            if name not in ("light", "dark", "auto"):
+                name = "dark"
+        except Exception:
+            name = "dark"
+
+        # 标记用户主题覆盖（避免被热更新反复改回）
+        try:
+            import time
+            self._user_theme_override = name
+            self._last_user_theme_change_ts = time.time()
+        except Exception:
+            pass
+
+        # 保存到 SettingsService
+        try:
+            if self.app_service and hasattr(self, 'container') and self.container:
+                settings_service = self.container.get(SettingsService)
+                settings_service.set_setting("ui.theme", name)
+        except Exception:
+            pass
 
     def run(self) -> int:
         """
@@ -637,10 +768,65 @@ class AINovelEditorApp:
 
                 def _apply_theme(theme_name: str):
                     try:
+                        # 项目热更新优先级规则：
+                        # 1) 若用户最近手动切换过主题（_user_theme_override），则尊重用户选择，忽略项目主题一次
+                        # 2) 否则使用项目提供的主题；若无效再回退到 QSettings；最后默认 dark
+                        allowed = ('light', 'dark', 'auto')
+
+                        # 若存在用户覆盖且较新（5秒内或一直存在），优先使用用户选择
+                        name_from_project = ''
+                        try:
+                            name_from_project = (str(theme_name) if theme_name is not None else '').strip().lower()
+                        except Exception:
+                            name_from_project = ''
+
+                        use_name = ''
+
+                        # 判断是否应尊重用户最近的手动覆盖（10秒内）
+                        try:
+                            import time
+                            override = getattr(self, '_user_theme_override', None)
+                            ts = getattr(self, '_last_user_theme_change_ts', None)
+                            if override in allowed and isinstance(ts, (int, float)):
+                                if time.time() - float(ts) <= 10.0:
+                                    use_name = override
+                        except Exception:
+                            pass
+
+                        if not use_name:
+                            if name_from_project in allowed:
+                                use_name = name_from_project
+                            else:
+                                # 不再从 QSettings 回退
+                                use_name = ''
+                        if use_name not in allowed:
+                            use_name = 'dark'
+
+                        # 若采用了项目主题而非用户覆盖，则清空覆盖标记
+                        try:
+                            if use_name != getattr(self, '_user_theme_override', None):
+                                self._user_theme_override = None
+                                self._last_user_theme_change_ts = None
+                        except Exception:
+                            pass
+
+                        # 应用到全局 ThemeManager
                         if self.main_window and hasattr(self.main_window, 'theme_manager'):
                             from src.presentation.styles.theme_manager import ThemeType
                             theme_map = {"light": ThemeType.LIGHT, "dark": ThemeType.DARK, "auto": ThemeType.AUTO}
-                            self.main_window.theme_manager.set_theme(theme_map.get(theme_name, ThemeType.DARK))
+                            self.main_window.theme_manager.set_theme(theme_map.get(use_name, ThemeType.DARK))
+
+                        # 持久化：统一仅 SettingsService
+                        try:
+                            from src.shared.ioc.container import get_global_container
+                            container = get_global_container()
+                            if container is not None:
+                                from src.application.services.settings_service import SettingsService
+                                ss = container.try_get(SettingsService)
+                                if ss is not None:
+                                    ss.set_setting('ui.theme', use_name)
+                        except Exception:
+                            pass
                     except Exception:
                         pass
 
@@ -689,9 +875,10 @@ class AINovelEditorApp:
         finally:
             self._cleanup()
 
-    def _apply_language(self, _lang_code: str):
+    def _apply_language(self, lang_code: str):
         """应用界面语言（若有翻译文件则加载）"""
         try:
+            _ = lang_code  # 占位，避免未使用参数告警
             # 目前默认中文，无翻译包时仅占位
             # 如果未来提供 .qm 资源，可在此按 lang_code 加载并安装
             # 示例：translator.load(f":/i18n/app_{_lang_code}.qm")
@@ -711,8 +898,15 @@ class AINovelEditorApp:
             recent_manager = get_recent_projects_manager()
             recent_projects = recent_manager.get_recent_projects()
 
-            # 创建启动页面（无论是否有最近项目都显示）
-            startup_window = StartupWindow(recent_projects)
+            # 确保在显示启动页前已注入 ThemeManager
+            try:
+                if hasattr(self, 'theme_manager') and self.theme_manager:
+                    setattr(self.main_window, 'theme_manager', self.theme_manager)
+            except Exception:
+                pass
+
+            # 创建启动页面（无论是否有最近项目都显示），传入主窗口以复用 ThemeManager
+            startup_window = StartupWindow(recent_projects, parent=self.main_window, theme_manager=self.theme_manager)
 
             # 连接信号
             startup_window.remove_requested.connect(recent_manager.remove_project)
@@ -812,6 +1006,12 @@ class AINovelEditorApp:
 
             startup_window.create_new_project.connect(on_create_project)
 
+            # 在显示前注入与主程序一致的 ThemeManager，避免新建实例
+            try:
+                if hasattr(self, 'theme_manager') and self.theme_manager:
+                    setattr(startup_window, 'theme_manager', self.theme_manager)
+            except Exception:
+                pass
             # 显示启动页面
             result = startup_window.exec()
 

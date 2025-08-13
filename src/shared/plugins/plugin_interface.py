@@ -240,43 +240,131 @@ class IPlugin(ABC):
 
 class PluginContext:
     """插件上下文"""
-    
+
     def __init__(self, app_context: Any):
         self.app_context = app_context
         self._hooks: Dict[str, PluginHook] = {}
         self._plugin_settings: Dict[str, Dict[str, Any]] = {}
-    
+
     def register_hook(self, hook_name: str, callback: Callable):
         """注册钩子回调"""
         if hook_name not in self._hooks:
             self._hooks[hook_name] = PluginHook(hook_name)
         self._hooks[hook_name].register(callback)
-    
+
     def unregister_hook(self, hook_name: str, callback: Callable):
         """取消注册钩子回调"""
         if hook_name in self._hooks:
             self._hooks[hook_name].unregister(callback)
-    
+
     def execute_hook(self, hook_name: str, *args, **kwargs) -> List[Any]:
         """执行钩子"""
         if hook_name in self._hooks:
             return self._hooks[hook_name].execute(*args, **kwargs)
         return []
-    
+
     def get_plugin_settings(self, plugin_id: str) -> Dict[str, Any]:
         """获取插件设置"""
         return self._plugin_settings.get(plugin_id, {})
-    
+
     def set_plugin_settings(self, plugin_id: str, settings: Dict[str, Any]):
         """设置插件配置"""
         self._plugin_settings[plugin_id] = settings
-    
+
     def get_api(self, service_name: str) -> Any:
         """获取应用程序API"""
         # 这里可以根据service_name返回相应的服务实例
         if hasattr(self.app_context, service_name):
             return getattr(self.app_context, service_name)
         return None
+
+    # ========= 扩展：导出格式注册（供导出类插件调用） =========
+    def register_export_format(self, format_name: str, extensions: List[str], plugin: 'IPlugin') -> None:
+        """
+        允许插件向导入导出服务注册导出处理器。
+        每个扩展名（去掉点）将注册为一个 format_type 对应的处理器。
+        """
+        try:
+            # 延迟导入，避免循环依赖
+            from src.application.services.import_export.base import BaseFormatHandler, ExportOptions, ImportOptions
+            import asyncio
+
+            # 获取服务
+            service = None
+            try:
+                container = getattr(self.app_context, 'container', None)
+                if container:
+                    from src.application.services.import_export_service import ImportExportService
+                    service = container.get(ImportExportService)
+            except Exception:
+                service = None
+            if not service:
+                return
+
+            class PluginExportFormatHandler(BaseFormatHandler):
+                def __init__(self, svc, plug, fmt_name, exts):
+                    super().__init__(svc)
+                    self._plugin = plug
+                    self._format_name = fmt_name
+                    self._extensions = [e if e.startswith('.') else f'.{e}' for e in (exts or [])]
+
+                def get_supported_extensions(self) -> List[str]:
+                    return self._extensions
+
+                def get_format_name(self) -> str:
+                    return self._format_name
+
+                async def _do_export_project(self, project, output_path, options: ExportOptions) -> bool:
+                    # 合并导出参数
+                    base_opts = {}
+                    try:
+                        base_opts = dict(getattr(self._plugin, 'export_options', {}) or {})
+                    except Exception:
+                        base_opts = {}
+                    fmt_opts = {}
+                    try:
+                        fmt_opts = dict(getattr(options, 'format_options', {}) or {})
+                    except Exception:
+                        fmt_opts = {}
+                    merged = {**base_opts, **fmt_opts}
+                    merged.setdefault('encoding', getattr(options, 'output_encoding', 'utf-8'))
+                    # 同步方法放入线程池
+                    return await asyncio.to_thread(self._plugin.export_project, project, output_path, merged)
+
+                async def _do_export_document(self, document, output_path, options: ExportOptions) -> bool:
+                    base_opts = {}
+                    try:
+                        base_opts = dict(getattr(self._plugin, 'export_options', {}) or {})
+                    except Exception:
+                        base_opts = {}
+                    fmt_opts = {}
+                    try:
+                        fmt_opts = dict(getattr(options, 'format_options', {}) or {})
+                    except Exception:
+                        fmt_opts = {}
+                    merged = {**base_opts, **fmt_opts}
+                    merged.setdefault('encoding', getattr(options, 'output_encoding', 'utf-8'))
+                    return await asyncio.to_thread(self._plugin.export_document, document, output_path, merged)
+
+            handler = PluginExportFormatHandler(service, plugin, format_name, extensions)
+
+            # 为每个扩展名注册处理器（去掉点作为键）
+            for ext in (extensions or []):
+                key = (ext[1:] if ext.startswith('.') else ext).lower()
+                try:
+                    service.register_format_handler(key, handler)
+                except Exception:
+                    pass
+            # 也尝试用格式名注册（方便显式指定）
+            try:
+                service.register_format_handler(format_name.lower(), handler)
+            except Exception:
+                pass
+        except Exception as e:
+            # 不影响主流程
+            import traceback
+            logger = get_logger(__name__)
+            logger.debug(f"register_export_format 失败: {e}\n{traceback.format_exc()}")
 
 
 class PluginException(Exception):

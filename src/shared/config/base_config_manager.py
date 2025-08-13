@@ -177,31 +177,46 @@ class BaseConfigManager(ABC):
             self.config_data = self.get_default_config().copy()
     
     def _save_config(self) -> bool:
-        """保存配置"""
-        temp_file = None
+        """保存配置（与现有文件深度合并，单一配置文件共存）"""
         try:
             self._ensure_config_dir()
 
             # 验证配置数据的JSON兼容性
             self._validate_config_for_json()
 
-            # 统一文件操作进行原子写入 + 备份（线程安全地调用异步实现）
+            # 读取现有文件并深度合并
             from src.shared.utils.file_operations import get_file_operations
             ops = get_file_operations("config")
-            ok = self._run_coro_blocking(ops.save_json_atomic(self.config_file, self.config_data, create_backup=True))
+            existing: Dict[str, Any] = {}
+            try:
+                loaded = self._run_coro_blocking(ops.load_json_cached(self.config_file)) if self.config_file.exists() else None
+                if isinstance(loaded, dict):
+                    existing = loaded
+            except Exception:
+                existing = {}
+
+            def deep_merge(base: Dict[str, Any], updates: Dict[str, Any]) -> Dict[str, Any]:
+                out = dict(base)
+                for k, v in updates.items():
+                    if isinstance(v, dict) and isinstance(out.get(k), dict):
+                        out[k] = deep_merge(out[k], v)  # type: ignore[assignment]
+                    else:
+                        out[k] = v
+                return out
+
+            merged = deep_merge(existing, self.config_data)
+
+            # 原子写入 + 备份
+            ok = self._run_coro_blocking(ops.save_json_atomic(self.config_file, merged, create_backup=True))
             if ok:
                 logger.debug(f"配置保存成功: {self.config_file}")
+                # 回写到内存，保持一致
+                self.config_data = merged
                 return True
             return False
 
         except Exception as e:
             logger.error(f"保存配置失败: {e}")
-            # 清理临时文件
-            if temp_file and temp_file.exists():
-                try:
-                    temp_file.unlink()
-                except Exception:
-                    pass
             return False
 
     def _validate_config_for_json(self) -> None:

@@ -89,31 +89,10 @@ class SmartActionButton(QPushButton):
             # 手动输入 - 灰色
             color = "#605E5C"
         
-        style = f"""
-            QPushButton {{
-                background-color: {color};
-                color: white;
-                border: none;
-                padding: 12px 16px;
-                border-radius: 6px;
-                font-weight: bold;
-                font-size: 13px;
-                min-height: 20px;
-            }}
-            QPushButton:hover {{
-                background-color: {self._darken_color(color)};
-            }}
-            QPushButton:pressed {{
-                background-color: {self._darken_color(color, 0.3)};
-            }}
-            QPushButton:disabled {{
-                background-color: #F3F2F1;
-                color: #A19F9D;
-            }}
-        """
-        
-        self.setStyleSheet(style)
-    
+        # 改为使用主题强调按钮样式，避免内联样式固定颜色
+        self.setProperty("accent", True)
+        self.setStyleSheet("")
+
     def _darken_color(self, color: str, factor: float = 0.1) -> str:
         """使颜色变暗"""
         # 简单的颜色变暗实现
@@ -204,12 +183,12 @@ class IntelligentAIPanel(BaseAIWidget):
         # 标题
         title_label = QLabel("🧠 AI智能助手")
         title_label.setFont(self.title_font)
-        title_label.setStyleSheet(f"color: {self.colors['primary']}; font-weight: bold;")
-        
+        # 颜色由主题控制
+
         # 智能化指示器
         self.intelligence_indicator = QLabel("🤖 100%智能化")
-        self.intelligence_indicator.setStyleSheet(f"color: {self.colors['success']}; font-weight: bold;")
-        
+        # 颜色由主题控制
+
         title_layout.addWidget(title_label)
         title_layout.addStretch()
         title_layout.addWidget(self.intelligence_indicator)
@@ -220,17 +199,9 @@ class IntelligentAIPanel(BaseAIWidget):
         """创建统计信息区域"""
         stats_frame = QFrame()
         stats_frame.setFrameStyle(QFrame.Shape.Box)
-        stats_frame.setStyleSheet(f"""
-            QFrame {{
-                border: 1px solid {self.colors['border']};
-                border-radius: 6px;
-                background-color: #F8F9FA;
-                padding: 8px;
-            }}
-        """)
-        
+        # 外观由主题控制
         stats_layout = QHBoxLayout(stats_frame)
-        
+
         # 统计标签
         self.stats_labels = {
             'total': QLabel("总功能: 0"),
@@ -239,10 +210,10 @@ class IntelligentAIPanel(BaseAIWidget):
         }
         
         for label in self.stats_labels.values():
-            label.setStyleSheet(f"color: {self.colors['text_primary']}; font-weight: bold;")
+            # 颜色交由主题控制
             stats_layout.addWidget(label)
             stats_layout.addWidget(QLabel("|"))  # 分隔符
-        
+
         # 移除最后一个分隔符
         stats_layout.takeAt(stats_layout.count() - 1)
         
